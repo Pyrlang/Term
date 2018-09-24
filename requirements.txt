@@ -1,0 +1,10 @@
+# Documentation requirements
+Jinja2==2.9.6
+MarkupSafe==1.0
+Pillow==4.0.0
+Pygments==2.2.0
+Sphinx==1.6.2
+
+# Setup/Rust build requires
+setuptools_rust==0.10.5
+semantic_version==2.6.0

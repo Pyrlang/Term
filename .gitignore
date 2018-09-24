@@ -1,0 +1,11 @@
+/venv
+/target
+*.egg-info
+*.pyc
+*.pyo
+
+*.o
+*.a
+*.so
+
+*.iml
