@@ -2,13 +2,15 @@
     and then if import fails, uses Python codec implementation which is slower
     but always works.
 """
+import importlib
 import logging
 
-LOG = logging.getLogger("Term")
+LOG = logging.getLogger("term")
 
 
 try:
-    import native_codec_impl as co_impl
+    # import term.native_codec_impl as co_impl
+    co_impl = importlib.import_module("native_codec_impl", "term")
 
     def decorate(x):
         """ For Native extension i've no idea how to make default arg value """
@@ -17,7 +19,7 @@ try:
         return wrapper
 
 except ImportError:
-    LOG.warning("Native library import failed, falling back to slower Python impl")
+    LOG.warning("Native term ETF codec library import failed, falling back to slower Python impl")
     import term.py_codec_impl as co_impl
 
     def decorate(x):
