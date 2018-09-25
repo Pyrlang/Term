@@ -4,7 +4,7 @@ Pyrlang Term Library
 Term is a Python 3.5 library which supports Erlang Term encoding, decoding and
 representation as Python values. There are identical implementations of codec
 in Python and in Rust, if your machine doesn't have Rust compiler installed,
-the library.
+the slower Python implementation will be used automatically.
 
 This library has no dependencies on other parts of Pyrlang project and can be
 used standalone.
