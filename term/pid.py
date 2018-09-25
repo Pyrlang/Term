@@ -37,6 +37,9 @@ class Pid(BasePid):
         self.creation_ = creation
 
     def is_local_to(self, node):
+        """ Compares self.node_name to other node.node_name
+            :type node: pyrlang.node.Node
+        """
         return self.node_name_ == node.node_name_
 
     def __repr__(self) -> str:

@@ -48,3 +48,8 @@ dev: requirements
 
 install: requirements
 	$(PY) setup.py install
+
+# Run Pyre type check (requires: pip install pyre-check):
+.PHONY: pyre
+pyre:
+	pyre check
