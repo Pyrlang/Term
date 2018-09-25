@@ -1,7 +1,7 @@
-Term.erl_typing
+term.fun module
 ===============
 
-.. automodule:: Term.erl_typing
+.. automodule:: term.fun
     :members:
     :undoc-members:
     :show-inheritance:

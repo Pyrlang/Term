@@ -1,0 +1,147 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="Python">
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    
+    <title>Pyrlang Term Library &#8212; Pyrlang Terms 1.0 documentation</title>
+    
+    <link rel="stylesheet" href="_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
+    
+    <script type="text/javascript">
+      var DOCUMENTATION_OPTIONS = {
+        URL_ROOT:    './',
+        VERSION:     '1.0',
+        COLLAPSE_INDEX: false,
+        FILE_SUFFIX: '.html',
+        HAS_SOURCE:  true,
+        SOURCELINK_SUFFIX: '.txt'
+      };
+    </script>
+    <script type="text/javascript" src="_static/jquery.js"></script>
+    <script type="text/javascript" src="_static/underscore.js"></script>
+    <script type="text/javascript" src="_static/doctools.js"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="Data Types in Pyrlang" href="data_types.html" />
+   
+  <link rel="stylesheet" href="_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head>
+  <body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <div class="section" id="pyrlang-term-library">
+<h1>Pyrlang Term Library<a class="headerlink" href="#pyrlang-term-library" title="Permalink to this headline">¶</a></h1>
+<p>Term is a Python 3.5 library which supports Erlang Term encoding, decoding and
+representation as Python values. There are identical implementations of codec
+in Python and in Rust, if your machine doesn't have Rust compiler installed,
+the library.</p>
+<p>This library has no dependencies on other parts of Pyrlang project and can be
+used standalone.</p>
+<p>Important APIs are:</p>
+<div class="highlight-python"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">term</span> <span class="kn">import</span> <span class="n">codec</span><span class="p">,</span> <span class="n">Atom</span>
+<span class="n">t</span> <span class="o">=</span> <span class="n">codec</span><span class="o">.</span><span class="n">term_to_binary</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="n">Atom</span><span class="p">(</span><span class="s1">&#39;ok&#39;</span><span class="p">)))</span>
+<span class="c1"># Function term_to_binary will prepend a 131 byte tag</span>
+<span class="c1"># Function term_to_binary_2 encodes without a leading 131 byte</span>
+
+<span class="p">(</span><span class="n">val</span><span class="p">,</span> <span class="n">tail</span><span class="p">)</span> <span class="o">=</span> <span class="n">codec</span><span class="o">.</span><span class="n">binary_to_term</span><span class="p">(</span><span class="nb">bytes</span><span class="p">)</span>
+<span class="c1"># Returns a pair: value and remaining bytes</span>
+<span class="c1"># Function binary_to_term strips leading 131 byte and also handles</span>
+<span class="c1"># decompression of an eventually compressed term</span>
+<span class="c1"># Function binary_to_term_2 decodes without a leading 131 byte</span>
+</pre></div>
+</div>
+<div class="toctree-wrapper compound">
+<p class="caption"><span class="caption-text">Contents</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="data_types.html">Data Types in Pyrlang</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="data_types.html#decoding">Decoding</a></li>
+<li class="toctree-l2"><a class="reference internal" href="data_types.html#encoding">Encoding</a></li>
+<li class="toctree-l2"><a class="reference internal" href="data_types.html#lists">Lists</a></li>
+<li class="toctree-l2"><a class="reference internal" href="data_types.html#binaries">Binaries</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="term.atom.html">term.atom module</a></li>
+<li class="toctree-l1"><a class="reference internal" href="term.bitstring.html">term.bitstring module</a></li>
+<li class="toctree-l1"><a class="reference internal" href="term.erl_typing.html">term.erl_typing helper module</a></li>
+<li class="toctree-l1"><a class="reference internal" href="term.fun.html">term.fun module</a></li>
+<li class="toctree-l1"><a class="reference internal" href="term.list.html">term.list module</a></li>
+<li class="toctree-l1"><a class="reference internal" href="term.pid.html">term.pid module</a></li>
+<li class="toctree-l1"><a class="reference internal" href="term.py_codec_impl.html">term.py_codec_impl module</a></li>
+<li class="toctree-l1"><a class="reference internal" href="term.reference.html">term.reference module</a></li>
+</ul>
+</div>
+</div>
+
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<div style="margin-bottom:16px;">
+    <a class="toc-return"
+       href="index.html" alt="Return to Start"><strong>Return to Start</strong></a>
+</div>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="#">Documentation overview</a><ul>
+      <li>Next: <a href="data_types.html" title="next chapter">Data Types in Pyrlang</a></li>
+  </ul></li>
+</ul>
+</div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="_sources/index.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <form class="search" action="search.html" method="get">
+      <div><input type="text" name="q" /></div>
+      <div><input type="submit" value="Go" /></div>
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2017, Erlang Solutions Ltd..
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.6.2</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.11</a>
+      
+      |
+      <a href="_sources/index.rst.txt"
+          rel="nofollow">Page source</a>
+    </div>
+
+    
+
+    
+  </body>
+</html>

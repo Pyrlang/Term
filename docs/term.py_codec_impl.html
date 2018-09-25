@@ -1,0 +1,245 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" lang="Python">
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    
+    <title>term.py_codec_impl module &#8212; Pyrlang Terms 1.0 documentation</title>
+    
+    <link rel="stylesheet" href="_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
+    
+    <script type="text/javascript">
+      var DOCUMENTATION_OPTIONS = {
+        URL_ROOT:    './',
+        VERSION:     '1.0',
+        COLLAPSE_INDEX: false,
+        FILE_SUFFIX: '.html',
+        HAS_SOURCE:  true,
+        SOURCELINK_SUFFIX: '.txt'
+      };
+    </script>
+    <script type="text/javascript" src="_static/jquery.js"></script>
+    <script type="text/javascript" src="_static/underscore.js"></script>
+    <script type="text/javascript" src="_static/doctools.js"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="term.reference module" href="term.reference.html" />
+    <link rel="prev" title="term.pid module" href="term.pid.html" />
+   
+  <link rel="stylesheet" href="_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head>
+  <body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <div class="section" id="module-term.py_codec_impl">
+<span id="term-py-codec-impl-module"></span><h1>term.py_codec_impl module<a class="headerlink" href="#module-term.py_codec_impl" title="Permalink to this headline">¶</a></h1>
+<p>Module implements encoder and decoder from ETF (Erlang External Term Format)
+used by the network distribution layer.</p>
+<dl class="function">
+<dt id="term.py_codec_impl.binary_to_term">
+<code class="descclassname">term.py_codec_impl.</code><code class="descname">binary_to_term</code><span class="sig-paren">(</span><em>data: bytes</em>, <em>options: dict = None) -&gt; (&lt;built-in function any&gt;</em>, <em>&lt;class 'bytes'&gt;</em><span class="sig-paren">)</span><a class="headerlink" href="#term.py_codec_impl.binary_to_term" title="Permalink to this definition">¶</a></dt>
+<dd><p>Strip 131 header and unpack if the data was compressed.</p>
+<table class="docutils field-list" frame="void" rules="none">
+<col class="field-name" />
+<col class="field-body" />
+<tbody valign="top">
+<tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><ul class="first simple">
+<li><strong>data</strong> -- The incoming encoded data with the 131 byte</li>
+<li><strong>options</strong> -- <ul>
+<li>&quot;atom&quot;: &quot;str&quot; | &quot;bytes&quot; | &quot;Atom&quot; (default &quot;Atom&quot;).
+Returns atoms as strings, as bytes or as atom.Atom objects.</li>
+<li>&quot;byte_string&quot;: &quot;str&quot; | &quot;bytes&quot; (default &quot;str&quot;).
+Returns 8-bit strings as Python str or bytes.</li>
+</ul>
+</li>
+</ul>
+</td>
+</tr>
+<tr class="field-even field"><th class="field-name">Raises:</th><td class="field-body"><p class="first"><a class="reference internal" href="#term.py_codec_impl.PyCodecError" title="term.py_codec_impl.PyCodecError"><strong>PyCodecError</strong></a> -- when the tag is not 131, when compressed
+data is incomplete or corrupted</p>
+</td>
+</tr>
+<tr class="field-odd field"><th class="field-name">Returns:</th><td class="field-body"><p class="first last">Remaining unconsumed bytes</p>
+</td>
+</tr>
+</tbody>
+</table>
+</dd></dl>
+
+<dl class="function">
+<dt id="term.py_codec_impl.binary_to_term_2">
+<code class="descclassname">term.py_codec_impl.</code><code class="descname">binary_to_term_2</code><span class="sig-paren">(</span><em>data: bytes</em>, <em>options: dict = None) -&gt; (&lt;built-in function any&gt;</em>, <em>&lt;class 'bytes'&gt;</em><span class="sig-paren">)</span><a class="headerlink" href="#term.py_codec_impl.binary_to_term_2" title="Permalink to this definition">¶</a></dt>
+<dd><p>Proceed decoding after leading tag has been checked and removed.</p>
+<p>Erlang lists are decoded into <code class="docutils literal"><span class="pre">term.List</span></code> object, whose <code class="docutils literal"><span class="pre">elements_</span></code>
+field contains the data, <code class="docutils literal"><span class="pre">tail_</span></code> field has the optional tail and a
+helper function exists to assist with extracting an unicode string.</p>
+<p>Atoms are decoded to <code class="xref py py-class docutils literal"><span class="pre">Atom</span></code> or optionally to bytes
+or to strings.
+Pids are decoded into <code class="xref py py-class docutils literal"><span class="pre">Pid</span></code>.
+Refs decoded to and <code class="xref py py-class docutils literal"><span class="pre">Reference</span></code>.
+Maps are decoded into Python <code class="docutils literal"><span class="pre">dict</span></code>.
+Binaries are decoded into <code class="docutils literal"><span class="pre">bytes</span></code>
+object and bitstrings into a pair of <code class="docutils literal"><span class="pre">(bytes,</span> <span class="pre">last_byte_bits:int)</span></code>.</p>
+<table class="docutils field-list" frame="void" rules="none">
+<col class="field-name" />
+<col class="field-body" />
+<tbody valign="top">
+<tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><ul class="first simple">
+<li><strong>options</strong> -- <dl class="docutils">
+<dt>dict(str, _);</dt>
+<dd><ul class="first last">
+<li>&quot;atom&quot;: &quot;str&quot; | &quot;bytes&quot; | &quot;Atom&quot;; default &quot;Atom&quot;.
+Returns atoms as strings, as bytes or as atom.Atom class objects</li>
+</ul>
+</dd>
+</dl>
+<ul>
+<li>&quot;byte_string&quot;: &quot;str&quot; | &quot;bytes&quot; (default &quot;str&quot;).
+Returns 8-bit strings as Python str or bytes.</li>
+</ul>
+</li>
+<li><strong>data</strong> -- Bytes containing encoded term without 131 header</li>
+</ul>
+</td>
+</tr>
+<tr class="field-even field"><th class="field-name">Returns:</th><td class="field-body"><p class="first">Tuple[Value, Tail: bytes]
+The function consumes as much data as
+possible and returns the tail. Tail can be used again to parse
+another term if there was any.</p>
+</td>
+</tr>
+<tr class="field-odd field"><th class="field-name">Raises:</th><td class="field-body"><p class="first last"><a class="reference internal" href="#term.py_codec_impl.PyCodecError" title="term.py_codec_impl.PyCodecError"><strong>PyCodecError</strong></a><strong>(</strong><strong>str</strong><strong>)</strong> -- on various errors</p>
+</td>
+</tr>
+</tbody>
+</table>
+</dd></dl>
+
+<dl class="function">
+<dt id="term.py_codec_impl.term_to_binary">
+<code class="descclassname">term.py_codec_impl.</code><code class="descname">term_to_binary</code><span class="sig-paren">(</span><em>val</em>, <em>opt: typing.Union[NoneType</em>, <em>dict] = None</em><span class="sig-paren">)</span> &#x2192; bytes<a class="headerlink" href="#term.py_codec_impl.term_to_binary" title="Permalink to this definition">¶</a></dt>
+<dd><p>Prepend the 131 header byte to encoded data.
+:param opt: None or dict of options: &quot;encode_hook&quot; is a callable which</p>
+<blockquote>
+<div>will return representation for unknown object types. Returning
+None will be encoded as such and becomes Atom('undefined').</div></blockquote>
+</dd></dl>
+
+<dl class="function">
+<dt id="term.py_codec_impl.term_to_binary_2">
+<code class="descclassname">term.py_codec_impl.</code><code class="descname">term_to_binary_2</code><span class="sig-paren">(</span><em>val, encode_hook: typing.Union[typing.Callable, NoneType]</em><span class="sig-paren">)</span> &#x2192; bytes<a class="headerlink" href="#term.py_codec_impl.term_to_binary_2" title="Permalink to this definition">¶</a></dt>
+<dd><p>Erlang lists are decoded into term.List object, whose <code class="docutils literal"><span class="pre">elements_</span></code>
+field contains the data, <code class="docutils literal"><span class="pre">tail_</span></code> field has the optional tail and a
+helper function exists to assist with extracting an unicode string.</p>
+<table class="docutils field-list" frame="void" rules="none">
+<col class="field-name" />
+<col class="field-body" />
+<tbody valign="top">
+<tr class="field-odd field"><th class="field-name">Parameters:</th><td class="field-body"><ul class="first simple">
+<li><strong>encode_hook</strong> -- None or a callable which will represent an unknown
+object as an Erlang term before encoding. Returning None will be
+encoded as such and becomes Atom('undefined').</li>
+<li><strong>val</strong> -- Almost any Python value</li>
+</ul>
+</td>
+</tr>
+<tr class="field-even field"><th class="field-name">Returns:</th><td class="field-body"><p class="first last">bytes object with encoded data, but without a 131 header byte.</p>
+</td>
+</tr>
+</tbody>
+</table>
+</dd></dl>
+
+<dl class="exception">
+<dt id="term.py_codec_impl.PyCodecError">
+<em class="property">exception </em><code class="descclassname">term.py_codec_impl.</code><code class="descname">PyCodecError</code><a class="headerlink" href="#term.py_codec_impl.PyCodecError" title="Permalink to this definition">¶</a></dt>
+<dd><p>Bases: <code class="xref py py-class docutils literal"><span class="pre">Exception</span></code></p>
+</dd></dl>
+
+<dl class="function">
+<dt id="term.py_codec_impl.generic_serialize_object">
+<code class="descclassname">term.py_codec_impl.</code><code class="descname">generic_serialize_object</code><span class="sig-paren">(</span><em>obj</em>, <em>cd: set = None</em><span class="sig-paren">)</span><a class="headerlink" href="#term.py_codec_impl.generic_serialize_object" title="Permalink to this definition">¶</a></dt>
+<dd><p>Given an arbitraty Python object creates a tuple (ClassName, {Fields}).
+A fair effort is made to avoid infinite recursion on cyclic objects.
+:param obj: Arbitrary object to encode
+:param cd: A set with ids of object, for cycle detection
+:return: A pair of result: (ClassName :: bytes(), Fields :: {bytes(), _})</p>
+<blockquote>
+<div>or None, and a CycleDetect value</div></blockquote>
+</dd></dl>
+
+</div>
+
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<div style="margin-bottom:16px;">
+    <a class="toc-return"
+       href="index.html" alt="Return to Start"><strong>Return to Start</strong></a>
+</div>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="index.html">Documentation overview</a><ul>
+      <li>Previous: <a href="term.pid.html" title="previous chapter">term.pid module</a></li>
+      <li>Next: <a href="term.reference.html" title="next chapter">term.reference module</a></li>
+  </ul></li>
+</ul>
+</div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="_sources/term.py_codec_impl.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <form class="search" action="search.html" method="get">
+      <div><input type="text" name="q" /></div>
+      <div><input type="submit" value="Go" /></div>
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2017, Erlang Solutions Ltd..
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.6.2</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.11</a>
+      
+      |
+      <a href="_sources/term.py_codec_impl.rst.txt"
+          rel="nofollow">Page source</a>
+    </div>
+
+    
+
+    
+  </body>
+</html>

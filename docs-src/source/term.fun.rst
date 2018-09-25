@@ -1,7 +1,7 @@
-Term.fun
-========
+term.fun module
+===============
 
-.. automodule:: Term.fun
+.. automodule:: term.fun
     :members:
     :undoc-members:
     :show-inheritance:

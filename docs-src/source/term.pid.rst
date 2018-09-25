@@ -1,7 +1,7 @@
-Term.list
-=========
+term.pid module
+===============
 
-.. automodule:: Term.list
+.. automodule:: term.pid
     :members:
     :undoc-members:
     :show-inheritance:

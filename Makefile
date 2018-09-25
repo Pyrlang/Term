@@ -31,7 +31,11 @@ dtest: compile
 
 .PHONY: docs
 docs:
-	cd docs && $(MAKE) html
+	rm -rf $(ROOT)/docs; \
+	cd docs-src && \
+	$(MAKE) html && \
+	mv -f $(ROOT)/docs-src/build/html $(ROOT)/docs && \
+	touch $(ROOT)/docs/.nojekyll
 
 #
 # Installing for development, and for release
