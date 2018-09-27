@@ -9,4 +9,9 @@
 *.a
 *.so
 
+/.idea
 *.iml
+
+# Pyre Typecheck
+/.pyre
+/.pyre_configuration

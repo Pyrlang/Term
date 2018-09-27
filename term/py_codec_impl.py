@@ -182,8 +182,8 @@ def binary_to_term_2(data: bytes, options: dict = None) -> (any, bytes):
                * "byte_string": "str" | "bytes" (default "str").
                  Returns 8-bit strings as Python str or bytes.
         :param data: Bytes containing encoded term without 131 header
-        :return: Tuple[Value, Tail: bytes]
-            The function consumes as much data as
+        :rtype: Tuple[Value, Tail: bytes]
+        :return: The function consumes as much data as
             possible and returns the tail. Tail can be used again to parse
             another term if there was any.
         :raises PyCodecError(str): on various errors

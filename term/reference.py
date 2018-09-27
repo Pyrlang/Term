@@ -11,8 +11,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+import random
 import struct
+import time
 
 from term import util
 from term.atom import Atom
@@ -24,6 +25,21 @@ class Reference:
     """ Represents a reference value from Erlang, typically it has 12 bytes of
         unique data, but it might change.
     """
+
+    @staticmethod
+    def create(node_name: str, creation: int):
+        """ Construct a (most possibly) unique ref with random bytes and time
+            :param node_name: string, not a Node object
+            :param creation: int value 0, 1 or 2 from node's distribution object
+            :rtype: term.reference.Reference
+        """
+        rand_val = int(time.monotonic() * 1000000) + random.randrange(1000000)
+        rand_bytes = rand_val.to_bytes(length=12,
+                                       byteorder="big",
+                                       signed=False)
+        return Reference(node_name=node_name,
+                         creation=creation,
+                         refid=rand_bytes)
 
     def __init__(self, node_name: str, creation: int, refid: bytes) -> None:
         self.node_name_ = node_name
