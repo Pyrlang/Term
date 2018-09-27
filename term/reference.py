@@ -31,7 +31,7 @@ class Reference:
         """ Construct a (most possibly) unique ref with random bytes and time
             :param node_name: string, not a Node object
             :param creation: int value 0, 1 or 2 from node's distribution object
-            :return: term.reference.Reference
+            :rtype: term.reference.Reference
         """
         rand_val = int(time.monotonic() * 1000000) + random.randrange(1000000)
         rand_bytes = rand_val.to_bytes(length=12,

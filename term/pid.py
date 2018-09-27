@@ -38,13 +38,14 @@ class Pid(BasePid):
 
     def is_local_to(self, node):
         """ Compares self.node_name to other node.node_name
+            :param node: Check whether pid is local to the node.
             :type node: pyrlang.node.Node
         """
         return self.node_name_ == node.node_name_
 
     def __repr__(self) -> str:
-        return "Pid<%d.%d.%d>@%s" % (self.creation_, self.id_, self.serial_,
-                                     self.node_name_)
+        return "<%d.%d.%d @ %s>" % (self.creation_, self.id_, self.serial_,
+                                    self.node_name_)
 
     def __str__(self) -> str:
         return self.__repr__()
