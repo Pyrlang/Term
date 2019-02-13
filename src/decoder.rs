@@ -129,6 +129,16 @@ impl <'a> Decoder<'a> {
       consts::TAG_STRING_EXT => self.parse_string(tail), // 16-bit sz bytestr
       consts::TAG_SMALL_UINT => self.parse_number::<u8>(tail),
       consts::TAG_INT => self.parse_number::<i32>(tail),
+      consts::TAG_SMALL_BIG_EXT => {
+        let size = tail[0] as usize;
+        let sign: u8 = tail[1];
+        self.parse_arbitrary_length_int(&in_bytes[3..], size, sign)
+      },
+      consts::TAG_LARGE_BIG_EXT => {
+        let size: u32 = tail.read_with::<u32>(&mut 0usize, byte::BE)?;
+        let sign: u8 = tail[4];
+        self.parse_arbitrary_length_int(&in_bytes[6..], size as usize, sign)
+      },
       consts::TAG_NEW_FLOAT_EXT => self.parse_number::<f64>(tail),
       consts::TAG_MAP_EXT => self.parse_map(tail),
       consts::TAG_SMALL_TUPLE_EXT => {
@@ -297,6 +307,27 @@ impl <'a> Decoder<'a> {
   }
 
 
+  #[inline]
+  fn parse_arbitrary_length_int<'inp>(&self, in_bytes: &'inp [u8], size: usize, sign: u8) -> CodecResult<(PyObject, &'inp [u8])> {
+    let offset = &mut 0usize;
+    if *offset + size > in_bytes.len() {
+      return Err(CodecError::BinaryInputTooShort)
+    }
+    let bin = &in_bytes[*offset..(*offset+size)];
+    let data = PyBytes::new(self.py, bin);
+    let builtins = self.py.import("builtins")?;
+    let py_int = builtins.get(self.py, "int")?;
+    let val = py_int.call_method(self.py, "from_bytes", (data, "little"), None)?;
+    let val = if sign == 0 {
+        val
+    } else {
+      val.call_method(self.py, "__mul__", (-1, ), None)?
+    };
+
+    *offset += size;
+    let remaining = &in_bytes[*offset..];
+    Ok((val.into_object(), remaining))
+  }
   /// Given input _after_ binary tag, parse remaining bytes
   #[inline]
   fn parse_binary<'inp>(&self, in_bytes: &'inp [u8]) -> CodecResult<(PyObject, &'inp [u8])>

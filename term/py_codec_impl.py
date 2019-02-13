@@ -372,7 +372,7 @@ def binary_to_term_2(data: bytes, options: dict = None) -> (any, bytes):
         in_bytes = data[6:(6 + nbytes)]
         # NOTE: int.from_bytes is Python 3.2+
         result_lbi = int.from_bytes(in_bytes, byteorder='little')
-        if data[2] != 0:
+        if data[5] != 0:
             result_lbi = -result_lbi
         return result_lbi, data[6 + nbytes:]
 
@@ -447,11 +447,24 @@ def _pack_dict(val: dict, encode_hook) -> bytes:
     return data
 
 
-def _pack_int(val):
+def _pack_int(val: int):
     if 0 <= val < 256:
         return bytes([TAG_SMALL_INT, val])
+    size = val.bit_length()
+    if size <= 32:
+        return bytes([TAG_INT]) + util.to_i32(val)
+    # we get here we're packing smal or large big
+    sign = 0 if 0 <= val else 1
+    if sign:
+        val *= -1  # switch to positive value
+    size = int(size / 8) + 1
+    if size < 256:
+        hdr = bytes([TAG_SMALL_BIG_EXT, size, sign])
+    else:
+        hdr = bytes([TAG_LARGE_BIG_EXT]) + util.to_u32(size) + bytes([sign])
 
-    return bytes([TAG_INT]) + util.to_i32(val)
+    data = val.to_bytes(size, 'little')
+    return hdr + data
 
 
 # TODO: maybe move this into atom class

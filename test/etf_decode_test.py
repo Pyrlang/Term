@@ -247,6 +247,78 @@ class TestETFDecode(unittest.TestCase):
 
     # ----------------
 
+    def test_decode_int_py(self):
+        self._decode_int(py_impl)
+
+    def test_decode_int_native(self):
+        self._decode_int(native_impl)
+
+    def _decode_int(self, codec):
+        positive = bytes([131, 98, 0, 0, 18, 139])  # 4747
+        negative = bytes([131, 98, 255, 255, 237, 117])  # -4747
+        (positive_val, positive_tail) = codec.binary_to_term(positive, None)
+        (negative_val, negative_tail) = codec.binary_to_term(negative, None)
+        self.assertEqual(positive_val, 4747)
+        self.assertEqual(positive_tail, b'')
+        self.assertEqual(negative_val, -4747)
+        self.assertEqual(negative_tail, b'')
+
+    # ----------------
+
+    def test_decode_small_big_py(self):
+        self._decode_small_big(py_impl)
+
+    def test_decode_small_big_native(self):
+        self._decode_small_big(native_impl)
+
+    def _decode_small_big(self, codec):
+        positive = bytes([131, 110, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1])  # 2 ** 64
+        negative = bytes([131, 110, 9, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1])  # - (2 ** 64)
+        (positive_val, positive_tail) = codec.binary_to_term(positive, None)
+        (negative_val, negative_tail) = codec.binary_to_term(negative, None)
+        self.assertEqual(positive_val, 2 ** 64)
+        self.assertEqual(positive_tail, b'')
+        self.assertEqual(negative_val, -(2 ** 64))
+        self.assertEqual(negative_tail, b'')
+
+    # ----------------
+
+    def test_decode_large_big_py(self):
+        self._decode_large_big(py_impl)
+
+    def test_decode_large_big_native(self):
+        self._decode_large_big(native_impl)
+
+    def _decode_large_big(self, codec):
+        positive = bytes([131, 111, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1])  # 2 ** 2040
+        negative = bytes([131, 111, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1])  # - (2 ** 2040)
+        (positive_val, positive_tail) = codec.binary_to_term(positive, None)
+        (negative_val, negative_tail) = codec.binary_to_term(negative, None)
+        self.assertEqual(positive_val, 2 ** 2040)
+        self.assertEqual(positive_tail, b'')
+        self.assertEqual(negative_val, -(2 ** 2040))
+        self.assertEqual(negative_tail, b'')
+
+    # ----------------
+
     def test_decode_binary_py(self):
         self._decode_binary(py_impl)
 
