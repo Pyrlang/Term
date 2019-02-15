@@ -241,8 +241,26 @@ class TestETFDecode(unittest.TestCase):
         data = bytes([py_impl.ETF_VERSION_TAG,
                       py_impl.TAG_NEW_FLOAT_EXT,  # a 8-byte IEEE double
                       64, 9, 33, 251, 84, 68, 45, 17])
+        negative = bytes([131, 70, 192, 71, 188, 40, 245, 194, 143, 92])
         (val, tail) = codec.binary_to_term(data, None)
+        (nval, ntail) = codec.binary_to_term(negative, None)
         self.assertEqual(val, 3.14159265358979)
+        self.assertEqual(tail, b'')
+        self.assertEqual(nval, -47.47)
+        self.assertEqual(ntail, b'')
+
+    # ----------------
+    def test_float_in_packed_type_py(self):
+        self._float_in_packed_type(py_impl)
+
+    def test_float_in_packed_type_native(self):
+        self._float_in_packed_type(native_impl)
+
+    def _float_in_packed_type(self, codec):
+        example = bytes([131, 104, 3, 70, 64, 9, 30, 184, 81, 235, 133, 31, 97, 13, 70, 64, 1,
+                         194, 143, 92, 40, 245, 195])
+        val, tail = codec.binary_to_term(example, None)
+        self.assertEqual(val, (3.14, 13, 2.22))
         self.assertEqual(tail, b'')
 
     # ----------------

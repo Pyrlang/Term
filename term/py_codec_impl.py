@@ -354,7 +354,7 @@ def binary_to_term_2(data: bytes, options: dict = None) -> (any, bytes):
 
     if tag == TAG_NEW_FLOAT_EXT:
         (result_f,) = struct.unpack(">d", data[1:9])
-        return result_f, data[10:]
+        return result_f, data[9:]
 
     if tag == TAG_SMALL_BIG_EXT:
         nbytes = data[1]
