@@ -206,7 +206,6 @@ impl<'a> Encoder<'a> {
     }
   }
 
-  #[inline]
   fn write_arbitrary_int(&mut self, val: &PyObject, size: u32) -> CodecResult<()> {
     if size < 256 {
       self.data.push(consts::TAG_SMALL_BIG_EXT);
