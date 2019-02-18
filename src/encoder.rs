@@ -52,8 +52,7 @@ impl<'a> Encoder<'a> {
     let type_name_ref: &str = type_name.as_ref();
     match type_name_ref {
       "int" => {
-        let val: i64 = FromPyObject::extract(self.py, term)?;
-        return self.write_int(val)
+        return self.write_int(&term)
       },
       "float" => {
         let val: f64 = FromPyObject::extract(self.py, term)?;
@@ -196,7 +195,46 @@ impl<'a> Encoder<'a> {
 
 
   #[inline]
-  fn write_int(&mut self, val: i64) -> CodecResult<()> {
+  fn write_int(&mut self, val: &PyObject) -> CodecResult<()> {
+    let size: u64 = val.call_method(self.py, "bit_length", NoArgs, None)?.extract(self.py)?;
+    let size: u32 = (size / 8 + 1) as u32;
+    if size <= 4 {
+      let v: i64 = FromPyObject::extract(self.py, val)?;
+      self.write_4byte_int(v)
+    } else {
+      self.write_arbitrary_int(val, size)
+    }
+  }
+
+  fn write_arbitrary_int(&mut self, val: &PyObject, size: u32) -> CodecResult<()> {
+    if size < 256 {
+      self.data.push(consts::TAG_SMALL_BIG_EXT);
+      self.data.push(size as u8);
+    } else {
+      self.data.push(consts::TAG_LARGE_BIG_EXT);
+      self.data.write_u32::<BigEndian>(size);
+    }
+
+    let ltz: bool = val.call_method(self.py, "__lt__", (0, ), None)?.extract(self.py)?;
+    if ltz {
+      self.data.push(1 as u8); // we have a negative value
+      // we make new object that we multiply with -1 to switch sign, so that we get a positive
+      // value to pack
+      let r: PyObject = val.call_method(self.py, "__mul__", (-1, ), None)?.extract(self.py)?;
+      let b: PyBytes = r.call_method(self.py, "to_bytes", (size, "little"), None)?.extract(self.py)?;
+      let data: &[u8] = b.data(self.py);
+      self.data.write(data);
+    } else {
+      self.data.push( 0 as u8);
+      let b: PyBytes = val.call_method(self.py, "to_bytes", (size, "little"), None)?.extract(self.py)?;
+      let data: &[u8] = b.data(self.py);
+      self.data.write(data);
+    }
+    Ok(())
+  }
+
+  #[inline]
+  fn write_4byte_int(&mut self, val: i64) -> CodecResult<()> {
     if val >= 0 && val <= u8::MAX as i64 {
       self.data.push(consts::TAG_SMALL_UINT);
       self.data.push(val as u8);
@@ -270,7 +308,7 @@ impl<'a> Encoder<'a> {
       let chars_count = text.chars().count();
       self.data.write_u32::<BigEndian>(chars_count as u32); // chars, not bytes!
       for (_i, ch) in text.char_indices() {
-        self.write_int(ch as i64)?
+        self.write_4byte_int(ch as i64)?
       }
       self.data.push(consts::TAG_NIL_EXT) // list terminator
     }
