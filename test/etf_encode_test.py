@@ -252,6 +252,27 @@ class TestETFEncode(unittest.TestCase):
         self.assertEqual(b2, negative)
 
     # ----------------
+
+    def test_encode_small_big_random_bytes_py(self):
+        self._encode_small_big_random_bytes(py_impl)
+
+    def test_encode_small_big_random_bytes_native(self):
+        self._encode_small_big_random_bytes(native_impl)
+
+    def _encode_small_big_random_bytes(self, codec):
+        positive = bytes([py_impl.ETF_VERSION_TAG, py_impl.TAG_SMALL_BIG_EXT, 13, 0,
+                          210, 10, 63, 78, 238, 224, 115, 195, 246, 15, 233, 142, 1
+                          ])
+        negative = bytes([py_impl.ETF_VERSION_TAG, py_impl.TAG_SMALL_BIG_EXT, 13, 1,
+                          210, 10, 63, 78, 238, 224, 115, 195, 246, 15, 233, 142, 1
+                          ])
+        b1 = codec.term_to_binary(123456789012345678901234567890, None)
+        b2 = codec.term_to_binary(-123456789012345678901234567890, None)
+        self.assertEqual(b1, positive)
+        self.assertEqual(b2, negative)
+
+    # ----------------
+
     def test_encode_large_big_py(self):
         self._encode_large_big(py_impl)
 
