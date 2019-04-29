@@ -33,7 +33,7 @@ mod encoder;
 mod errors;
 mod helpers;
 
-py_exception!(term_codec, PyCodecError);
+py_exception!(native_codec_impl, PyCodecError);
 
 
 /// Strips 131 byte header and unpacks if the data was compressed.
@@ -86,6 +86,7 @@ fn m_init(py: Python, m: &PyModule) -> PyResult<()> {
         py_fn!(py, term_to_binary(py_term: PyObject, opt: PyObject)))?;
   m.add(py, "term_to_binary_2",
         py_fn!(py, term_to_binary_2(py_term: PyObject, opt: PyObject)))?;
+  m.add(py, "PyCodecError", py.get_type::<PyCodecError>())?;
   Ok(())
 }
 py_module_initializer!(
