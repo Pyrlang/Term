@@ -388,12 +388,10 @@ class TestETFDecode(unittest.TestCase):
 
     def _decode_int(self, codec):
         def negate_hook(x):
-            if type(x) == int:
-                return -x
-            else:
-                return x
+            return -x
+
         positive = bytes([131, 98, 0, 0, 18, 139])  # 4747
-        (negative_val, tail) = codec.binary_to_term(positive, {'decode_hook': negate_hook})
+        (negative_val, tail) = codec.binary_to_term(positive, {'decode_hook': {'int': negate_hook}})
         self.assertEqual(negative_val, -4747)
 
     # ----------------
@@ -445,15 +443,12 @@ class TestETFDecode(unittest.TestCase):
             a decode_hook.
         """
         def unicode_hook(x):
-            if isinstance(x, bytes):
-                return x.decode()
-            else:
-                return x
+            return x.decode()
 
         compressed_data = b'\x83P\x00\x00\x01\xc4x\x9c5\x90QR\x831\x08\x84\xebM\xf6\x00\x9d\x9eB\xdf|\xf5\x00\x98\xd0\xcaL\x08i\x02\x9d\xde\xce\xabI\xfc\xf5-\x04Xv?=\x9d^\xbe\xdfm\xb2B\xc6\nE\xb5f\x13K\x1c\xa4\xecg\x14\xeb\x8b\x8b\xb3\xc7\x04U\x19\xb2\xa4H\xbf\x81\x9bdwq\xcd\r\xb0\xc4R\xabp\xd6\x91\xdb\xd2\x8bT\xa9\xd1\x1d\xe1h\xf4\x99\xfa`?\xb4\x19J\xb7N\xa0&\xf7\xa0\x0b>\x1c\xdcES\x1c*\xfb\xf1\xc8\x92\xf4\x8c{\xc8B\xb7\xe53*\xf8\xc9\xb3\x88\x93\x8buDk\xa4\xc5\x0e\xe5=\x94\xa6\xf6\xa5_I\x199\x0c\xa6t\xae\xe9\xc9\x8e\x04y\xca/x\xdd\x92\x14\xce\x90\x19\xe9\xe4\x08+\x1d\x93\xc7\xe4/\xee\x95g&\xcf\x8f\x87\xb5\x18y\x8e\xd3N&\x05\xaf\xc5(\xd2\xda?\xa2\x0c\x14\xb8\xc6M\xc8\xd1\xb7!\x0c\x9aY\xc4\xbc\xe0\xedYx8\xc7\xe6\x98\x0c\xac\x14\xe2\x92s%\x86T\xf2\xbd\x91)\xc64\xa9\xdc7\xc5M*\x8f\x96h\x83vn\xd8\xf5\x9a\x98\t\x95\x17\xcf\xddUk\xdb\x06m@\x928\xd6\x1f\xd7\xd0\x0b~\x00'
         decoded_data = 'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum. '
 
-        (val, tail) = codec.binary_to_term(compressed_data, {'decode_hook': unicode_hook})
+        (val, tail) = codec.binary_to_term(compressed_data, {'decode_hook': {'bytes': unicode_hook}})
         self.assertTrue(isinstance(val, str))
         self.assertTrue(val == decoded_data)
         self.assertEqual(tail, b'')

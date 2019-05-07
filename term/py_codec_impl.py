@@ -111,12 +111,14 @@ def binary_to_term(data: bytes, options: dict = None) -> (any, bytes):
             raise PyCodecError("Compressed size mismatch with actual")
     else:
         decode_data = data[1:]
-    decode_hook = options.get('decode_hook', None)
-    if decode_hook:
-        val, rem = binary_to_term_2(decode_data, options)
-        return decode_hook(val), rem
+    
+    decode_hook = options.get('decode_hook', {})
+    val, rem = binary_to_term_2(decode_data, options)
+    type_name_ref = type(val).__name__
+    if type_name_ref in decode_hook:
+        return decode_hook.get(type_name_ref)(val), rem
     else:
-        return binary_to_term_2(decode_data, options)
+        return val,rem
 
 
 def _bytes_to_atom(name: bytes, encoding: str, create_atom_fn: Callable):
@@ -583,7 +585,7 @@ def _pack_binary(data, last_byte_bits):
            bytes([last_byte_bits]) + data
 
 
-def term_to_binary_2(val, encode_hook: Union[Callable, None]) -> bytes:
+def term_to_binary_2(val, encode_hook: [Callable, None]) -> bytes:
     """ Erlang lists are decoded into term.List object, whose ``elements_``
         field contains the data, ``tail_`` field has the optional tail and a
         helper function exists to assist with extracting an unicode string.
@@ -597,8 +599,9 @@ def term_to_binary_2(val, encode_hook: Union[Callable, None]) -> bytes:
         :return: bytes object with encoded data, but without a 131 header byte.
             None will be encoded as such and becomes Atom('undefined').
     """
-    if encode_hook is not None and type(val).__name__ in encode_hook:
-        val = encode_hook.get(type(val).__name__)(val)
+    type_name_ref = type(val).__name__
+    if encode_hook is not None and type_name_ref in encode_hook:
+        val = encode_hook.get(type_name_ref)(val)
 
     if type(val) == int:
         return _pack_int(val)
@@ -654,15 +657,20 @@ def term_to_binary_2(val, encode_hook: Union[Callable, None]) -> bytes:
             ser, _ = generic_serialize_object(val)
             return term_to_binary_2(ser, encode_hook)
         else:
-            return term_to_binary_2(catch_all(val), encode_hook)
+            return term_to_binary_2(catch_all(), encode_hook)
     else:
         return term_to_binary_2(catch_all(val), encode_hook)
 
 
 def term_to_binary(val, opt: Union[None, dict] = None) -> bytes:
     """ Prepend the 131 header byte to encoded data.
-        :param opt: None or dict of options: "encode_hook" is a callable which
-            will return representation for unknown object types. Returning
+        :param opt: 
+            None or a dict with key value pairs (t,v) where t
+            is a python type (as string, i.e. 'int' not int) and v a callable
+            operating on an object of type t.
+            Additionally, t may be 'catch_all' and v a callback which returns a
+            representation for unknown object types.
+        :return:
             None will be encoded as such and becomes Atom('undefined').
     """
     if opt is None:
