@@ -90,6 +90,8 @@ def binary_to_term(data: bytes, options: dict = None) -> (any, bytes):
                  Returns atoms as strings, as bytes or as atom.Atom objects.
                * "byte_string": "str" | "bytes" (default "str").
                  Returns 8-bit strings as Python str or bytes.
+               * "decode_hook" : callable. Python function called for each
+                 decoded term.
         :raises PyCodecError: when the tag is not 131, when compressed
             data is incomplete or corrupted
         :returns: Remaining unconsumed bytes
@@ -103,14 +105,18 @@ def binary_to_term(data: bytes, options: dict = None) -> (any, bytes):
     if data[1] == TAG_COMPRESSED:
         do = decompressobj()
         decomp_size = util.u32(data, 2)
-        decomp = do.decompress(data[6:]) + do.flush()
-        if len(decomp) != decomp_size:
+        decode_data = do.decompress(data[6:]) + do.flush()
+        if len(decode_data) != decomp_size:
             # Data corruption?
             raise PyCodecError("Compressed size mismatch with actual")
-
-        return binary_to_term_2(decomp, options)
-
-    return binary_to_term_2(data[1:], options)
+    else:
+        decode_data = data[1:]
+    decode_hook = options.get('decode_hook', None)
+    if decode_hook:
+        val, rem = binary_to_term_2(decode_data, options)
+        return decode_hook(val), rem
+    else:
+        return binary_to_term_2(decode_data, options)
 
 
 def _bytes_to_atom(name: bytes, encoding: str, create_atom_fn: Callable):
@@ -582,12 +588,18 @@ def term_to_binary_2(val, encode_hook: Union[Callable, None]) -> bytes:
         field contains the data, ``tail_`` field has the optional tail and a
         helper function exists to assist with extracting an unicode string.
 
-        :param encode_hook: None or a callable which will represent an unknown
-            object as an Erlang term before encoding. Returning None will be
-            encoded as such and becomes Atom('undefined').
+        :param encode_hook: None or a dict with key value pairs (t,v) where t
+            is a python type (as string, i.e. 'int' not int) and v a callable
+            operating on an object of type t.
+            Additionally, t may be 'catch_all' and v a callback which returns a
+            representation for unknown object types.
         :param val: Almost any Python value
         :return: bytes object with encoded data, but without a 131 header byte.
+            None will be encoded as such and becomes Atom('undefined').
     """
+    if encode_hook is not None and type(val).__name__ in encode_hook:
+        val = encode_hook.get(type(val).__name__)(val)
+
     if type(val) == int:
         return _pack_int(val)
 
@@ -633,16 +645,18 @@ def term_to_binary_2(val, encode_hook: Union[Callable, None]) -> bytes:
     # Check if options had encode_hook which is not None.
     # Otherwise check if value class has a __etf__ member which is used instead.
     # Otherwise encode as a tuple (Atom('ClassName), dir(value))
-    tmp_encode_hook = encode_hook
-    if tmp_encode_hook is None:
-        tmp_encode_hook = getattr(val, "__etf__", None)
-        if tmp_encode_hook is None:
+    catch_all = None
+    if encode_hook is not None:
+        catch_all = encode_hook.get('catch_all', None)
+    if catch_all is None:
+        catch_all = getattr(val, "__etf__", None)
+        if catch_all is None:
             ser, _ = generic_serialize_object(val)
             return term_to_binary_2(ser, encode_hook)
         else:
-            return term_to_binary_2(tmp_encode_hook(), encode_hook)
+            return term_to_binary_2(catch_all(val), encode_hook)
     else:
-        return term_to_binary_2(tmp_encode_hook(val), encode_hook)
+        return term_to_binary_2(catch_all(val), encode_hook)
 
 
 def term_to_binary(val, opt: Union[None, dict] = None) -> bytes:

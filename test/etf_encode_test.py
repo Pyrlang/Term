@@ -1,7 +1,9 @@
 import unittest
 
 from term import py_codec_impl as py_impl
-import term.native_codec_impl as native_impl
+from term import native_codec_impl as native_impl
+from term import codec as default_impl
+
 from term.atom import Atom
 from term.pid import Pid
 from term.reference import Reference
@@ -354,22 +356,22 @@ class TestETFEncode(unittest.TestCase):
 
     # ----------------
 
-    def test_encode_hook_fn_py(self):
-        self._encode_hook_fn(py_impl)
+    def test_catch_all_fn_py(self):
+        self._catch_all_fn(py_impl)
 
-    def test_encode_hook_fn_native(self):
-        self._encode_hook_fn(native_impl)
+    def test_catch_all_fn_native(self):
+        self._catch_all_fn(native_impl)
 
-    def _encode_hook_fn(self, codec):
+    def _catch_all_fn(self, codec):
         """ Tries to encode a special class CustomClass, and converts it to
             atom 'custom-hook!' using a hook function.
         """
         class Class1:
             pass
 
-        def encode_hook_fn(obj):
+        def catch_all_fn(obj):
             """ This function will fire if "encode_hook" is passed in encode
-                options dict.
+                options dict with the key "catch_all" present.
             """
             if isinstance(obj, Class1):
                 return Atom('custom-hook!')
@@ -378,8 +380,64 @@ class TestETFEncode(unittest.TestCase):
                           py_impl.TAG_SMALL_ATOM_UTF8_EXT, 12]) \
                    + b'custom-hook!'
         data1 = codec.term_to_binary(Class1(),
-                                     {"encode_hook": encode_hook_fn})
+                                     {"encode_hook": {'catch_all': catch_all_fn}})
         self.assertEqual(data1, example1)
+ 
+    # ----------------
+
+    def test_catch_all_fn_legacy(self):
+        """ Previous format of encode hook is deprecated when accessing the native
+            or py codecs explicitly. If accessed using the decorators in codec.py,
+            encode_hook=hook, will be transformed into a dict {'catch_all': hook}.
+        """
+        self._catch_all_legacy(default_impl)
+
+    def _catch_all_legacy(self, codec):
+        """ Tries to encode a special class CustomClass, and converts it to
+            atom 'custom-hook!' using a hook function.
+        """
+        class Class1:
+            pass
+
+        def catch_all_fn(obj):
+            """ This function will fire if "encode_hook" is passed in encode
+                options dict.
+            """
+            if isinstance(obj, Class1):
+                return Atom('custom-hook!')
+        example1 = bytes([py_impl.ETF_VERSION_TAG,
+                          py_impl.TAG_SMALL_ATOM_UTF8_EXT, 12]) \
+                   + b'custom-hook!'
+        data1 = codec.term_to_binary(Class1(),
+                                     {"encode_hook": catch_all_fn})
+        self.assertEqual(data1, example1)
+
+   # ----------------
+
+    def test_encode_hook_fn_py(self):
+        self._encode_hook_fn(py_impl)
+
+    def test_encode_hook_fn_native(self):
+        self._encode_hook_fn(native_impl)
+
+    def _encode_hook_fn(self, codec):
+        """ tries to encode a float by first casting it to int using an encode hook.
+        """
+
+        def float_to_int_override_fn(obj):
+            """ this function will fire for each float in encode, if "encode_hook"
+                is passed in encode options dict
+            """
+            if isinstance(obj, float):
+                return int(obj)
+
+        example1 = bytes([py_impl.ETF_VERSION_TAG,
+                          py_impl.TAG_SMALL_INT, 5])
+        data1 = codec.term_to_binary(5.0,
+                {"encode_hook": {'float': float_to_int_override_fn}})
+
+        self.assertEqual(data1, example1)
+
 
     # ----------------
 

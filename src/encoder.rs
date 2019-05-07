@@ -25,7 +25,8 @@ use std::borrow::Cow;
 pub struct Encoder<'a> {
   pub py: Python<'a>, // Python instance will live at least as long as Encoder
   pub data: Vec<u8>,
-  pub encode_hook: Option<PyObject>,
+  pub encode_hook: PyDict,
+  pub catch_all: Option<PyObject>,
   // A function py_codec_impl.generic_serialize_object used for unknown classes
   pub cached_generic_serialize_fn: Option<PyObject>,
 }
@@ -38,18 +39,43 @@ impl<'a> Encoder<'a> {
     } else {
       PyDict::extract(py, &opt)?
     };
+    let encode_hook = match py_opts.get_item(py, "encode_hook") {
+      Some(ref h1) => {
+        PyDict::extract(py, &h1)?
+      },
+      None => {
+        PyDict::new(py)
+      }
+    };
+    let catch_all = encode_hook.get_item(py, "catch_all");
+
     Ok(Encoder {
       py,
       data: Vec::with_capacity(32),
-      encode_hook: py_opts.get_item(py, "encode_hook"),
+      encode_hook: encode_hook,
+      catch_all: catch_all,
       cached_generic_serialize_fn: None,
     })
   }
 
+  pub fn encode(&mut self, py_term: &PyObject) -> CodecResult<()> {
+    let type_name = py_term.get_type(self.py).name(self.py).into_owned();
+    let type_name_ref: &str = type_name.as_ref();
+    match &self.encode_hook.get_item(self.py, type_name_ref) {
+      Some(ref h1) => {
+        let repr1 = h1.call(self.py, (py_term, ), None)?;
+        return self.encode_default(&repr1)
+      } None => {
+        return self.encode_default(py_term)
+      }
+    }
+  }
 
-  pub fn encode(&mut self, term: &PyObject) -> CodecResult<()> {
+
+  pub fn encode_default(&mut self, term: &PyObject) -> CodecResult<()> {
     let type_name = term.get_type(self.py).name(self.py).into_owned();
     let type_name_ref: &str = type_name.as_ref();
+	
     match type_name_ref {
       "int" => {
         return self.write_int(&term)
@@ -106,12 +132,12 @@ impl<'a> Encoder<'a> {
   }
 
 
-  /// For unknown object, check whether encode_hook is set, encode what it returns.
-  /// If no encode_hook was set, check whether object has ``__etf__(self)`` member.
+  /// For unknown object, check whether catch_all is set, encode what it returns.
+  /// If no catch_all was set, check whether object has ``__etf__(self)`` member.
   /// Else encode object as Tuple(b'ClassName', Dict(b'field', values)) trying
   ///   to avoid circular loops.
   fn write_unknown_object(&mut self, name: &str, py_term: &PyObject) -> CodecResult<()> {
-    match &self.encode_hook {
+    match &self.catch_all {
       Some(ref h1) => {
         let repr1 = h1.call(self.py, (py_term, ), None)?;
         return self.encode(&repr1)
@@ -125,7 +151,6 @@ impl<'a> Encoder<'a> {
       },
     }
   }
-
 
   fn write_generic_unknown_object(&mut self, py_term: &PyObject) -> CodecResult<()> {
     let py_fn = match &self.cached_generic_serialize_fn {
