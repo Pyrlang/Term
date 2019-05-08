@@ -55,7 +55,8 @@ pub enum AtomRepresentation {
 #[derive(Eq, PartialEq)]
 pub enum ByteStringRepresentation {
   Bytes,
-  Str
+  Str,
+  IntList
 }
 
 
@@ -76,13 +77,14 @@ pub fn get_atom_opt(py: Python, opts1: &PyDict) -> CodecResult<AtomRepresentatio
 }
 
 
-/// Option: "byte_string" => "bytes" | "str" (default: str)
+/// Option: "byte_string" => "bytes" | "str" | "int_list" (default: str)
 pub fn get_byte_str_opt(py: Python, opts1: &PyDict) -> CodecResult<ByteStringRepresentation>
 {
   let opt_s: String = get_str_opt(py, &opts1, "byte_string", "str")?;
   match opt_s.as_ref() {
     "bytes" => Ok(ByteStringRepresentation::Bytes),
     "str" => Ok(ByteStringRepresentation::Str),
+    "int_list" => Ok(ByteStringRepresentation::IntList),
     other => {
       let txt = format!(
         "'byte_string' option is '{}' while expected: bytes, str", other);

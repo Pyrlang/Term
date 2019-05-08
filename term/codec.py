@@ -22,8 +22,8 @@ def binary_to_term(data: bytes, options=None):
     :param options: Options dict (pending design)
                     * "atom": "str" | "bytes" | "Atom" (default "Atom").
                       Returns atoms as strings, as bytes or as atom.Atom objects.
-                    * "byte_string": "str" | "bytes" (default "str").
-                      Returns 8-bit strings as Python str or bytes.
+                    * "byte_string": "str" | "bytes" | "int_list" (default "str").
+                      Returns 8-bit strings as Python str, bytes or list of integers.
     :raises PyCodecError: when the tag is not 131, when compressed
                           data is incomplete or corrupted
     :returns: Remaining unconsumed bytes
