@@ -423,6 +423,16 @@ impl <'a> Decoder<'a> {
         *offset += sz;
         PyBytes::new(self.py, &in_bytes[offset1..(offset1 + sz)]).into_object()
       },
+      ByteStringRepresentation::IntList => {
+        let mut lst = Vec::<PyObject>::with_capacity(sz);
+        for i in 0..sz {
+          let val = &in_bytes[*offset+i];
+          let py_val = val.to_py_object(self.py).into_object();
+          lst.push(py_val);
+        };
+        *offset += sz;
+        PyList::new(self.py, lst.as_ref()).into_object()
+      },
     };
 
     let remaining = &in_bytes[*offset..];
@@ -601,4 +611,3 @@ pub fn wrap_decode_result(
     Err(e) => Err(e),
   }
 }
-

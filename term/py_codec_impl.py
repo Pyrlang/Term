@@ -88,8 +88,8 @@ def binary_to_term(data: bytes, options: dict = None) -> (any, bytes):
         :param options:
                * "atom": "str" | "bytes" | "Atom" (default "Atom").
                  Returns atoms as strings, as bytes or as atom.Atom objects.
-               * "byte_string": "str" | "bytes" (default "str").
-                 Returns 8-bit strings as Python str or bytes.
+               * "byte_string": "str" | "bytes" | "int_list" (default "str").
+                 Returns 8-bit strings as Python str or bytes or list of integers.
                * "decode_hook" : callable. Python function called for each
                  decoded term.
         :raises PyCodecError: when the tag is not 131, when compressed
@@ -155,6 +155,10 @@ def _get_create_atom_fn(opt: str) -> Callable:
 
 def _get_create_str_fn(opt: str) -> Callable:
     """ A tool function to create either a str or bytes from a 8-bit string. """
+
+    def _create_int_list(name: bytes) -> bytes:
+        return list(name)
+
     def _create_str_bytes(name: bytes) -> bytes:
         return name
 
@@ -165,6 +169,8 @@ def _get_create_str_fn(opt: str) -> Callable:
         return _create_str_str
     elif opt == "bytes":
         return _create_str_bytes
+    elif opt == "int_list":
+        return _create_int_list
 
     raise PyCodecError("Option 'byte_string' is '%s'; expected 'str', 'bytes'")
 
@@ -187,8 +193,8 @@ def binary_to_term_2(data: bytes, options: dict = None) -> (any, bytes):
         :param options: dict(str, _);
                 * "atom": "str" | "bytes" | "Atom"; default "Atom".
                   Returns atoms as strings, as bytes or as atom.Atom class objects
-               * "byte_string": "str" | "bytes" (default "str").
-                 Returns 8-bit strings as Python str or bytes.
+               * "byte_string": "str" | "bytes" | "int_list" (default "str").
+                 Returns 8-bit strings as Python str or bytes or int list.
         :param data: Bytes containing encoded term without 131 header
         :rtype: Tuple[Value, Tail: bytes]
         :return: The function consumes as much data as
