@@ -78,10 +78,12 @@ class TestETFDecode(unittest.TestCase):
     def test_decode_str_py(self):
         self._decode_str_ascii(py_impl)
         self._decode_str_unicode(py_impl)
+        self._decode_str_int_list(py_impl)
 
     def test_decode_str_native(self):
         self._decode_str_ascii(native_impl)
         self._decode_str_unicode(native_impl)
+        self._decode_str_int_list(py_impl)
 
     def _decode_str_ascii(self, codec):
         """ A string with bytes, encoded as optimized byte array. """
@@ -98,6 +100,16 @@ class TestETFDecode(unittest.TestCase):
                         "Result must be bytes, got " + t2.__class__.__name__)
         self.assertEqual(t2, b"hello")
         self.assertEqual(tail2, b'')
+
+
+    def _decode_str_int_list(self, codec):
+        """ A string with bytes, encoded as optimized byte array. """
+        b1 = bytes([131, py_impl.TAG_STRING_EXT,
+                    0, 5,
+                    104, 101, 108, 108, 111])
+        (t1, tail1) = codec.binary_to_term(b1, {"byte_string": "int_list"})
+        self.assertEqual(t1, [104, 101, 108, 108, 111])
+        self.assertEqual(tail1, b'')
 
     def _decode_str_unicode(self, codec):
         """ A string with emoji, encoded as a list of unicode integers. """

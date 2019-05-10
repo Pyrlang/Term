@@ -22,8 +22,8 @@ def binary_to_term(data: bytes, options=None, decode_hook=None):
     :param options: None or Options dict (pending design)
                     * "atom": "str" | "bytes" | "Atom" (default "Atom").
                       Returns atoms as strings, as bytes or as atom.Atom objects.
-                    * "byte_string": "str" | "bytes" (default "str").
-                      Returns 8-bit strings as Python str or bytes.
+                    * "byte_string": "str" | "bytes" | "int_list" (default "str").
+                      Returns 8-bit strings as Python str, bytes or list of integers.
     :param decode_hook: 
                 Key/value pairs t: str,f : callable, s.t. f(v) is run before encoding
                 for values v of type t. This allows for overriding the built-in encoding.
