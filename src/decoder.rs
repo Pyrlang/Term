@@ -37,6 +37,7 @@ pub struct Decoder<'a> {
   atom_representation: AtomRepresentation,
   bytestring_repr: ByteStringRepresentation,
 
+  pub decode_hook: PyDict,
   cached_atom_pyclass: Option<PyObject>,
   cached_pid_pyclass: Option<PyObject>,
   cached_ref_pyclass: Option<PyObject>,
@@ -49,14 +50,23 @@ impl <'a> Decoder<'a> {
   pub fn new(py: Python, opts: PyObject) -> CodecResult<Decoder> {
     // If opts is None, make it empty Dict, otherwise take it as PyDict
     let opts1 = helpers::maybe_dict(py, opts);
-
     let aopt = helpers::get_atom_opt(py, &opts1)?;
     let s8opt = helpers::get_byte_str_opt(py, &opts1)?;
 
+    let decode_hook = match opts1.get_item(py, "decode_hook") {
+      Some(ref h1) => {
+        PyDict::extract(py, &h1)?
+      },
+      None => {
+        PyDict::new(py)
+      }
+    };
+  
     Ok(Decoder {
       py,
       atom_representation: aopt,
       bytestring_repr: s8opt,
+      decode_hook: decode_hook,
       cached_atom_pyclass: None,
       cached_pid_pyclass: None,
       cached_ref_pyclass: None,
@@ -110,7 +120,7 @@ impl <'a> Decoder<'a> {
   {
     let tag = in_bytes[0];
     let tail = &in_bytes[1..];
-    match tag {
+    let result = match tag {
       consts::TAG_ATOM_EXT =>
         self.parse_atom::<u16>(tail, Encoding::Latin1),
       consts::TAG_ATOM_UTF8_EXT =>
@@ -153,6 +163,24 @@ impl <'a> Decoder<'a> {
       consts::TAG_NEW_REF_EXT => self.parse_ref(tail),
       consts::TAG_NEW_FUN_EXT => self.parse_fun(tail),
       _ => Err(CodecError::UnknownTermTagByte { b: tag }),
+    };
+
+    match result {
+      Ok((value, tail)) => {
+        // if type_name_ref is in decode_hook, call it
+        let type_name = value.get_type(self.py).name(self.py).into_owned();
+        let type_name_ref: &str = type_name.as_ref();
+        match &self.decode_hook.get_item(self.py, type_name_ref) {
+          Some(ref h1) => {
+            let repr1 = h1.call(self.py, (value, ), None)?;
+            return Ok((repr1, tail))
+          },
+          None => 
+            return Ok((value, tail))
+        }
+      }
+      Err(x) => 
+        return Err(x),
     }
   }
 
@@ -573,3 +601,4 @@ pub fn wrap_decode_result(
     Err(e) => Err(e),
   }
 }
+

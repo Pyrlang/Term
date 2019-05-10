@@ -14,33 +14,53 @@ except ImportError:
     import term.py_codec_impl as co_impl
 
 
-def binary_to_term(data: bytes, options=None):
+def binary_to_term(data: bytes, options=None, decode_hook=None):
     """
     Strip 131 header and unpack if the data was compressed.
 
     :param data: The incoming encoded data with the 131 byte
-    :param options: Options dict (pending design)
+    :param options: None or Options dict (pending design)
                     * "atom": "str" | "bytes" | "Atom" (default "Atom").
                       Returns atoms as strings, as bytes or as atom.Atom objects.
                     * "byte_string": "str" | "bytes" (default "str").
                       Returns 8-bit strings as Python str or bytes.
+    :param decode_hook: 
+                Key/value pairs t: str,f : callable, s.t. f(v) is run before encoding
+                for values v of type t. This allows for overriding the built-in encoding.
+                "catch_all": f is a callable which will return representation for unknown
+                object types.
     :raises PyCodecError: when the tag is not 131, when compressed
                           data is incomplete or corrupted
     :returns: Remaining unconsumed bytes
     """
-    return co_impl.binary_to_term(data, options)
+    opt = options if options else {}
+    if decode_hook:
+        opt['decode_hook'] = decode_hook
+    return co_impl.binary_to_term(data, opt)
 
 
-def term_to_binary(term: object, options=None):
+def term_to_binary(term: object, options=None, encode_hook=None):
     """
     Prepend the 131 header byte to encoded data.
-
-    :param opt: None or dict of options: "encode_hook" is a callable which
-                will return representation for unknown object types. Returning
+    :param options: None or a dict of options with key/values "encode_hook": f where f
+                is a callable which will return representation for unknown object types.
+                This is kept for backward compatibility, and is equivalent to
+                    encode_hook={"catch_all": f}
                 None will be encoded as such and becomes Atom('undefined').
+    :param encode_hook:
+                Key/value pairs t: str,f : callable, s.t. f(v) is run before rust encoding
+                for values of the type t. This allows for overriding the built-in encoding.
+                "catch_all": f is a callable which will return representation for unknown
+                object types.
     :returns: Bytes, the term object encoded with erlang binary term format
     """
-    return co_impl.term_to_binary(term, options)
+    opt = options if options else {}
+    if options and hasattr(options.get('encode_hook', {}) , '__call__'): 
+        # legacy encode_hook as single function transformed to 'catch_all' in new encode_hook dict
+        opt['encode_hook'] = {'catch_all': options.get('encode_hook')}
+    elif encode_hook:
+        opt['encode_hook'] = encode_hook
+    return co_impl.term_to_binary(term, opt)
 
 PyCodecError = co_impl.PyCodecError
 
