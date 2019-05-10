@@ -156,7 +156,7 @@ def _get_create_atom_fn(opt: str) -> Callable:
 def _get_create_str_fn(opt: str) -> Callable:
     """ A tool function to create either a str or bytes from a 8-bit string. """
 
-    def _create_int_list(name: bytes) -> bytes:
+    def _create_int_list(name: bytes) -> list:
         return list(name)
 
     def _create_str_bytes(name: bytes) -> bytes:
