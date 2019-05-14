@@ -1,6 +1,6 @@
 from setuptools import setup
 
-VERSION = '1.0'
+VERSION = '1.1'
 PKGNAME = "term"
 DESCR = 'Erlang term and External Term Format codec in Python and native Rust extension'
 AUTHOR = 'Erlang Solutions Ltd and S2HC Sweden AB',
