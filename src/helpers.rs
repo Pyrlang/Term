@@ -44,7 +44,7 @@ pub fn maybe_dict(py: Python, dict_or_none: PyObject) -> PyDict {
 }
 
 
-#[derive(Eq, PartialEq)]
+#[derive(Eq, PartialEq, Copy, Clone)]
 pub enum AtomRepresentation {
   TermAtom,
   Bytes,

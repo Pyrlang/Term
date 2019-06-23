@@ -520,7 +520,12 @@ impl <'a> Decoder<'a> {
   #[inline]
   fn parse_pid<'inp>(&mut self, in_bytes: &'inp [u8]) -> CodecResult<(PyObject, &'inp [u8])>
   {
+    // Temporarily switch atom representation to binary and then decode node
+    let save_repr = self.atom_representation;
+    self.atom_representation = AtomRepresentation::Str;
     let (node, tail1) = self.decode(in_bytes)?;
+    self.atom_representation = save_repr;
+
     let offset = &mut 0usize;
     let id: u32 = tail1.read_with::<u32>(offset, byte::BE)?;
     let serial: u32 = tail1.read_with::<u32>(offset, byte::BE)?;
@@ -540,15 +545,21 @@ impl <'a> Decoder<'a> {
     let offset = &mut 0usize;
     let term_len: u16 = in_bytes.read_with::<u16>(offset, byte::BE)?;
 
+    // Temporarily switch atom representation to binary and then decode node
+    let save_repr = self.atom_representation;
+    self.atom_representation = AtomRepresentation::Str;
     let (node, tail1) = self.decode(&in_bytes[*offset..])?;
+    self.atom_representation = save_repr;
 
     let creation: u8 = tail1[0];
     let last_index = 1 + (term_len as usize) * 4;
+
     let id: &[u8] = &tail1[1..last_index];
+    let bytes_id = PyBytes::new(self.py, id);
 
     let remaining = &tail1[last_index..];
     let ref_obj = self.get_ref_pyclass();
-    let py_ref = ref_obj.call(self.py, (node, creation, id), None)?;
+    let py_ref = ref_obj.call(self.py, (node, creation, bytes_id), None)?;
     Ok((py_ref.into_object(), remaining))
   }
 
