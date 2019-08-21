@@ -15,28 +15,20 @@
 ATOM_MARKER = "pyrlang.Atom"
 
 
-class Atom:
+class Atom(str):
+    def __repr__(self):
+        return'Atom({})'.format(super(Atom, self).__repr__())
+    
+    
+class StrictAtom(Atom):
     """ Stores a string decoded from Erlang atom. Encodes back to atom.
         Can serve as a Python dictionary key.
     """
-
-    def __init__(self, text: str) -> None:
-        self.text_ = text
-        """ Atom's text representation, supports unicode """
-
     def __repr__(self) -> str:
-        return "atom'%s'" % self.text_
+        return "Strict{}".format(super(StrictAtom, self).__repr__())
 
     def __str__(self):
-        return self.text_
-
-    def equals(self, other) -> bool:
-        return isinstance(other, Atom) and self.text_ == other.text_
-
-    __eq__ = equals
-
-    def __ne__(self, other):
-        return not self.equals(other)
-
+        return self.__repr__()
+    
     def __hash__(self):
-        return hash((ATOM_MARKER, self.text_))
+        return hash((ATOM_MARKER, super(StrictAtom, self).__hash__()))

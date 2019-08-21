@@ -27,7 +27,7 @@ class TestETFDecode(unittest.TestCase):
                     104, 101, 108, 108, 111])
         (t1, tail1) = codec.binary_to_term(b1, None)
         self.assertTrue(isinstance(t1, Atom), "Result must be Atom object")
-        self.assertEqual(t1.text_, "hello")
+        self.assertEqual(t1, "hello")
         self.assertEqual(tail1, b'')
 
         b2 = bytes([131, py_impl.TAG_SMALL_ATOM_EXT,
@@ -35,7 +35,7 @@ class TestETFDecode(unittest.TestCase):
                     104, 101, 108, 108, 111])
         (t2, tail2) = codec.binary_to_term(b2, None)
         self.assertTrue(isinstance(t2, Atom), "Result must be Atom object")
-        self.assertEqual(t2.text_, "hello")
+        self.assertEqual(t2, "hello")
         self.assertEqual(tail2, b'')
 
     def _decode_atom_utf8(self, codec):
@@ -44,8 +44,8 @@ class TestETFDecode(unittest.TestCase):
                     108, 195, 164, 103, 101, 116])
         (t1, tail1) = codec.binary_to_term(b1, None)
         self.assertTrue(isinstance(t1, Atom), "Result must be Atom object")
-        self.assertTrue(isinstance(t1.text_, str), "Result .text_ field must be str")
-        self.assertEqual(t1.text_, u"läget")
+        self.assertTrue(isinstance(t1, str), "Result must be str")
+        self.assertEqual(t1, u"läget")
         self.assertEqual(tail1, b'')
 
     # ----------------

@@ -111,7 +111,7 @@ def binary_to_term(data: bytes, options: dict = None) -> (any, bytes):
             raise PyCodecError("Compressed size mismatch with actual")
     else:
         decode_data = data[1:]
-    
+
     decode_hook = options.get('decode_hook', {})
     val, rem = binary_to_term_2(decode_data, options)
     type_name_ref = type(val).__name__
@@ -141,7 +141,7 @@ def _get_create_atom_fn(opt: str) -> Callable:
         return name.decode(encoding)
 
     def _create_atom_atom(name: bytes, encoding: str) -> Atom:
-        return Atom(text=name.decode(encoding))
+        return Atom(name.decode(encoding))
 
     if opt == "Atom":
         return _create_atom_atom
@@ -309,7 +309,7 @@ def binary_to_term_2(data: bytes, options: dict = None) -> (any, bytes):
         creation = tail[8]
 
         assert isinstance(node, Atom)
-        pid = Pid(node_name=node.text_,
+        pid = Pid(node_name=node,
                   id=id1,
                   serial=serial,
                   creation=creation)
@@ -324,7 +324,7 @@ def binary_to_term_2(data: bytes, options: dict = None) -> (any, bytes):
         id_len = 4 * term_len
         id1 = tail[1:id_len + 1]
 
-        ref = Reference(node_name=node.text_,
+        ref = Reference(node_name=node,
                         creation=creation,
                         refid=id1)
         return ref, tail[id_len + 1:]
@@ -634,7 +634,7 @@ def term_to_binary_2(val, encode_hook: [Callable, None]) -> bytes:
         return _pack_atom('undefined')
 
     elif isinstance(val, Atom):
-        return _pack_atom(val.text_)
+        return _pack_atom(val)
 
     elif isinstance(val, ImproperList):
         return _pack_list(val.elements_, val.tail_, encode_hook)
@@ -670,7 +670,7 @@ def term_to_binary_2(val, encode_hook: [Callable, None]) -> bytes:
 
 def term_to_binary(val, opt: Union[None, dict] = None) -> bytes:
     """ Prepend the 131 header byte to encoded data.
-        :param opt: 
+        :param opt:
             None or a dict with key value pairs (t,v) where t
             is a python type (as string, i.e. 'int' not int) and v a callable
             operating on an object of type t.
