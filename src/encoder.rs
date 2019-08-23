@@ -101,6 +101,7 @@ impl<'a> Encoder<'a> {
         return Ok(())
       },
       "Atom" => return self.write_atom(&term),
+      "StrictAtom" => return self.write_atom(&term),
       "str" => {
         let as_str = PyString::extract(self.py, &term)?;
         return self.write_str(&as_str)

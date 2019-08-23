@@ -2,7 +2,7 @@ import unittest
 
 from term import py_codec_impl as py_impl
 import term.native_codec_impl as native_impl
-from term.atom import Atom
+from term.atom import Atom, StrictAtom
 from term.pid import Pid
 from term.reference import Reference
 from term.fun import Fun
@@ -72,6 +72,83 @@ class TestETFDecode(unittest.TestCase):
                         "Expected bytes, have: " + t3.__class__.__name__)
         self.assertEqual(t3, b'hello')
         self.assertEqual(tail3, b'')
+
+    # ----------------
+
+    def test_decode_atom_as_strict_py(self):
+        self._decode_atom_as_strict(py_impl)
+
+    def test_decode_atom_as_strict_native(self):
+        self._decode_atom_as_strict(native_impl)
+
+    def _decode_atom_as_strict(self, codec):
+        b1 = bytes([131, py_impl.TAG_ATOM_EXT,
+                    0, 5,
+                    104, 101, 108, 108, 111])
+        (t1, tail1) = codec.binary_to_term(b1, {"atom": "StrictAtom"})
+        self.assertTrue(isinstance(t1, StrictAtom), "Result must be StrictAtom "
+                                                    "got {}".format(type(t1)))
+        self.assertEqual(t1, "hello")
+        self.assertEqual(tail1, b'')
+
+        b2 = bytes([131, py_impl.TAG_SMALL_ATOM_EXT,
+                    5,
+                    104, 101, 108, 108, 111])
+        (t2, tail2) = codec.binary_to_term(b2, {"atom": "StrictAtom"})
+        self.assertTrue(isinstance(t2, StrictAtom), "Result must be Atom "
+                                                    "object")
+        self.assertEqual(t2, "hello")
+        self.assertEqual(tail2, b'')
+
+    # ----------------
+
+    def test_decode_atom_custom_callable_py(self):
+        self._decode_atom_custom_callable(py_impl)
+        self._decode_atom_custom_class(py_impl)
+
+    def test_decode_atom_custom_callable_native(self):
+        self._decode_atom_custom_callable(native_impl)
+        self._decode_atom_custom_class(native_impl)
+
+    def _decode_atom_custom_callable(self, codec):
+        b1 = bytes([131, py_impl.TAG_ATOM_EXT,
+                    0, 5,
+                    104, 101, 108, 108, 111])
+
+        a_fun = lambda x: bytes(x.encode('utf8'))
+        (t1, tail1) = codec.binary_to_term(b1, {"atom_call": a_fun})
+        self.assertTrue(isinstance(t1, bytes))
+        self.assertEqual(t1, b"hello")
+        self.assertEqual(tail1, b'')
+
+    def _decode_atom_custom_class(self, codec):
+
+        b1 = bytes([131, py_impl.TAG_ATOM_EXT,
+                    0, 5,
+                    104, 101, 108, 108, 111])
+
+        class A(str):
+            pass
+
+        class B:
+            def __init__(self, text):
+                self._text = text
+
+        (t1, tail1) = codec.binary_to_term(b1, {"atom_call": str})
+        self.assertTrue(isinstance(t1, str))
+        self.assertEqual(t1, "hello")
+        self.assertEqual(tail1, b'')
+
+        (t2, tail2) = codec.binary_to_term(b1, {"atom_call": A})
+        self.assertTrue(isinstance(t2, str))
+        self.assertTrue(isinstance(t2, A))
+        self.assertEqual(t1, "hello")
+        self.assertEqual(tail1, b'')
+
+        (t3, tail3) = codec.binary_to_term(b1, {"atom_call": B})
+        self.assertTrue(isinstance(t3, B))
+        self.assertEqual(t3._text, "hello")
+        self.assertEqual(tail1, b'')
 
     # ----------------
 

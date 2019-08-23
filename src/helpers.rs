@@ -47,6 +47,7 @@ pub fn maybe_dict(py: Python, dict_or_none: PyObject) -> PyDict {
 #[derive(Eq, PartialEq, Copy, Clone)]
 pub enum AtomRepresentation {
   TermAtom,
+  TermStrictAtom,
   Bytes,
   Str,
 }
@@ -60,7 +61,7 @@ pub enum ByteStringRepresentation {
 }
 
 
-/// Option: "atom" => "bytes" | "str" | "Atom" (as Atom class, default)
+/// Option: "atom" => "bytes" | "str" | "Atom" | "StrictAtom" (as Atom class, default)
 pub fn get_atom_opt(py: Python, opts1: &PyDict) -> CodecResult<AtomRepresentation>
 {
   let opt_s = get_str_opt(py, &opts1, "atom", "Atom")?;
@@ -68,9 +69,10 @@ pub fn get_atom_opt(py: Python, opts1: &PyDict) -> CodecResult<AtomRepresentatio
     "bytes" => Ok(AtomRepresentation::Bytes),
     "str" => Ok(AtomRepresentation::Str),
     "Atom" => Ok(AtomRepresentation::TermAtom),
+    "StrictAtom" => Ok(AtomRepresentation::TermStrictAtom),
     other => {
       let txt = format!(
-        "'atom' option is '{}' while expected: bytes, str, Atom", other);
+        "'atom' option is '{}' while expected: bytes, str, Atom, StrictAtom", other);
       Err(CodecError::BadOptions {txt})
     }
   }

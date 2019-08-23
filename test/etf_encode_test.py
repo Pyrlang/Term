@@ -4,7 +4,7 @@ from term import py_codec_impl as py_impl
 from term import native_codec_impl as native_impl
 from term import codec as default_impl
 
-from term.atom import Atom
+from term.atom import Atom, StrictAtom
 from term.pid import Pid
 from term.reference import Reference
 # from term.fun import Fun
@@ -14,14 +14,22 @@ from term.bitstring import BitString
 
 class TestETFEncode(unittest.TestCase):
     def test_encode_atom_py(self):
-        self._encode_atom(py_impl)
-        self._encode_atom_utf8(py_impl)
+        self._encode_atom(py_impl, Atom)
+        self._encode_atom_utf8(py_impl, Atom)
 
     def test_encode_atom_native(self):
-        self._encode_atom(native_impl)
-        self._encode_atom_utf8(native_impl)
+        self._encode_atom(native_impl, Atom)
+        self._encode_atom_utf8(native_impl, Atom)
 
-    def _encode_atom(self, codec):
+    def test_encode_strict_atom_py(self):
+        self._encode_atom(py_impl, Atom)
+        self._encode_atom_utf8(py_impl, Atom)
+
+    def test_encode_strict_atom_native(self):
+        self._encode_atom(native_impl, Atom)
+        self._encode_atom_utf8(native_impl, Atom)
+
+    def _encode_atom(self, codec, atom_cls):
         """ Try an atom 'hello' encoded as Latin1 atom (16-bit length)
             or small atom (8bit length)
         """
@@ -31,7 +39,7 @@ class TestETFEncode(unittest.TestCase):
         example1 = bytes([py_impl.ETF_VERSION_TAG,
                           py_impl.TAG_ATOM_UTF8_EXT, 1, 4]) \
                    + (b'hello' * repeat1)
-        b1 = codec.term_to_binary(Atom("hello" * repeat1), None)
+        b1 = codec.term_to_binary(atom_cls("hello" * repeat1), None)
         self.assertEqual(b1, example1)
 
         # Create and encode 'hello...hello' 5 times (25 bytes)
@@ -39,16 +47,16 @@ class TestETFEncode(unittest.TestCase):
         example2 = bytes([py_impl.ETF_VERSION_TAG,
                           py_impl.TAG_SMALL_ATOM_UTF8_EXT, 25]) \
                    + (b'hello' * repeat2)
-        b2 = codec.term_to_binary(Atom("hello" * repeat2), None)
+        b2 = codec.term_to_binary(atom_cls("hello" * repeat2), None)
         self.assertEqual(b2, example2)
 
-    def _encode_atom_utf8(self, codec):
+    def _encode_atom_utf8(self, codec, atom_cls):
         # Create and encode 'hallå...hallå' 50 times (300 bytes)
         repeat1 = 50
         example1 = bytes([py_impl.ETF_VERSION_TAG,
                           py_impl.TAG_ATOM_UTF8_EXT, 1, (300-256)]) \
                    + (bytes("hallå", "utf8") * repeat1)
-        b1 = codec.term_to_binary(Atom("hallå" * repeat1), None)
+        b1 = codec.term_to_binary(atom_cls("hallå" * repeat1), None)
         self.assertEqual(b1, example1)
 
         # Create and encode 'hallå...hallå' 5 times (30 bytes)
@@ -56,7 +64,7 @@ class TestETFEncode(unittest.TestCase):
         example2 = bytes([py_impl.ETF_VERSION_TAG,
                           py_impl.TAG_SMALL_ATOM_UTF8_EXT, 30]) \
                    + (bytes("hallå", "utf8") * repeat2)
-        b2 = codec.term_to_binary(Atom("hallå" * repeat2), None)
+        b2 = codec.term_to_binary(atom_cls("hallå" * repeat2), None)
         self.assertEqual(b2, example2)
 
     # ---------------------

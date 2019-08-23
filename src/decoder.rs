@@ -51,6 +51,7 @@ impl <'a> Decoder<'a> {
     // If opts is None, make it empty Dict, otherwise take it as PyDict
     let opts1 = helpers::maybe_dict(py, opts);
     let aopt = helpers::get_atom_opt(py, &opts1)?;
+    let cached_atom_pyclass = opts1.get_item(py, "atom_call");
     let s8opt = helpers::get_byte_str_opt(py, &opts1)?;
 
     let decode_hook = match opts1.get_item(py, "decode_hook") {
@@ -61,13 +62,13 @@ impl <'a> Decoder<'a> {
         PyDict::new(py)
       }
     };
-  
+
     Ok(Decoder {
       py,
       atom_representation: aopt,
       bytestring_repr: s8opt,
-      decode_hook: decode_hook,
-      cached_atom_pyclass: None,
+      decode_hook,
+      cached_atom_pyclass,
       cached_pid_pyclass: None,
       cached_ref_pyclass: None,
       cached_fun_pyclass: None,
@@ -175,11 +176,11 @@ impl <'a> Decoder<'a> {
             let repr1 = h1.call(self.py, (value, ), None)?;
             return Ok((repr1, tail))
           },
-          None => 
+          None =>
             return Ok((value, tail))
         }
       }
-      Err(x) => 
+      Err(x) =>
         return Err(x),
     }
   }
@@ -192,7 +193,11 @@ impl <'a> Decoder<'a> {
       Some(ref a) => a.clone_ref(self.py),
       None => {
         let atom_m = self.py.import("term.atom").unwrap();
-        let atom_cls = atom_m.get(self.py, "Atom").unwrap();
+        let atom_cls = match &self.atom_representation {
+          AtomRepresentation::TermStrictAtom => atom_m.get(self.py, "StrictAtom").unwrap(),
+          _ => atom_m.get(self.py, "Atom").unwrap()
+        };
+
         self.cached_atom_pyclass = Some(atom_cls.clone_ref(self.py));
         atom_cls
       },
@@ -326,7 +331,7 @@ impl <'a> Decoder<'a> {
         let py_txt = PyString::new(self.py, txt);
         Ok(py_txt.into_object())
       },
-      AtomRepresentation::TermAtom => {
+      _ => {
         // Construct Atom object (Note: performance cost)
         let atom_obj = self.get_atom_pyclass();
         Ok(atom_obj.call(self.py, (txt,), None)?)
