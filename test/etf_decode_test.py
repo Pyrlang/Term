@@ -1,4 +1,5 @@
 import unittest
+import sys
 
 from term import py_codec_impl as py_impl
 import term.native_codec_impl as native_impl
@@ -149,6 +150,33 @@ class TestETFDecode(unittest.TestCase):
         self.assertTrue(isinstance(t3, B))
         self.assertEqual(t3._text, "hello")
         self.assertEqual(tail1, b'')
+
+    # ----------------
+
+    def test_ref_count_leak_on_custom_atom(self):
+        b = bytes([131, py_impl.TAG_ATOM_EXT,
+                   0, 5,
+                   104, 101, 108, 108, 111])
+
+        def test_fun(codec, b_data):
+            class A(str):
+                pass
+
+            return codec.binary_to_term(b_data, {'atom_call': A})
+
+        for i in range(10):
+            p_res, p_tail = test_fun(py_impl, b)
+            n_res, n_tail = test_fun(native_impl, b)
+
+        p_type = type(p_res)
+        p_type_refs = sys.getrefcount(p_type)
+        n_type = type(n_res)
+        n_type_refs = sys.getrefcount(n_type)
+        print('\n', p_type, p_type_refs, n_type, n_type_refs)
+        self.assertEqual(p_res, n_res)
+        self.assertEqual(p_tail, n_tail)
+        self.assertNotEqual(p_type, n_type)
+        self.assertEqual(p_type_refs, n_type_refs)
 
     # ----------------
 
