@@ -75,7 +75,7 @@ impl<'a> Encoder<'a> {
   pub fn encode_default(&mut self, term: &PyObject) -> CodecResult<()> {
     let type_name = term.get_type(self.py).name(self.py).into_owned();
     let type_name_ref: &str = type_name.as_ref();
-	
+
     match type_name_ref {
       "int" => {
         return self.write_int(&term)
@@ -101,6 +101,7 @@ impl<'a> Encoder<'a> {
         return Ok(())
       },
       "Atom" => return self.write_atom(&term),
+      "StrictAtom" => return self.write_atom(&term),
       "str" => {
         let as_str = PyString::extract(self.py, &term)?;
         return self.write_str(&as_str)
@@ -286,8 +287,7 @@ impl<'a> Encoder<'a> {
   /// Encode a UTF-8 Atom
   #[inline]
   fn write_atom(&mut self, py_atom: &PyObject) -> CodecResult<()> {
-    let py_text0 = py_atom.getattr(self.py, "text_")?;
-    let py_text: PyString = PyString::extract(self.py, &py_text0)?;
+    let py_text: PyString = PyString::extract(self.py, &py_atom)?;
     let text = py_text.to_string(self.py)?;
     self.write_atom_from_cow(text)
   }

@@ -22,7 +22,7 @@ from typing import Callable, Union
 from zlib import decompressobj
 
 from term import util
-from term.atom import Atom
+from term.atom import Atom, StrictAtom
 from term.fun import Fun
 from term.list import NIL, ImproperList
 from term.pid import Pid
@@ -86,8 +86,9 @@ def binary_to_term(data: bytes, options: dict = None) -> (any, bytes):
 
         :param data: The incoming encoded data with the 131 byte
         :param options:
-               * "atom": "str" | "bytes" | "Atom" (default "Atom").
-                 Returns atoms as strings, as bytes or as atom.Atom objects.
+               * "atom": "str" | "bytes" | "Atom" | "StrictAtom" (default
+                 "Atom"). Returns atoms as strings, as bytes or as atom.Atom
+                 objects.
                * "byte_string": "str" | "bytes" | "int_list" (default "str").
                  Returns 8-bit strings as Python str or bytes or list of integers.
                * "decode_hook" : callable. Python function called for each
@@ -111,7 +112,7 @@ def binary_to_term(data: bytes, options: dict = None) -> (any, bytes):
             raise PyCodecError("Compressed size mismatch with actual")
     else:
         decode_data = data[1:]
-    
+
     decode_hook = options.get('decode_hook', {})
     val, rem = binary_to_term_2(decode_data, options)
     type_name_ref = type(val).__name__
@@ -133,7 +134,7 @@ def _bytes_to_atom(name: bytes, encoding: str, create_atom_fn: Callable):
         return create_atom_fn(name, encoding)
 
 
-def _get_create_atom_fn(opt: str) -> Callable:
+def _get_create_atom_fn(opt: str, callable: object) -> Callable:
     def _create_atom_bytes(name: bytes, _encoding: str) -> bytes:
         return name
 
@@ -141,16 +142,27 @@ def _get_create_atom_fn(opt: str) -> Callable:
         return name.decode(encoding)
 
     def _create_atom_atom(name: bytes, encoding: str) -> Atom:
-        return Atom(text=name.decode(encoding))
+        return Atom(name.decode(encoding))
 
+    def _create_atom_strict_atom(name: bytes, encoding: str) -> Atom:
+        return StrictAtom(name.decode(encoding))
+    
+    def _create_atom_custom(name: bytes, encoding: str) -> object:
+        return callable(name.decode(encoding))
+
+    if callable is not None:
+        return _create_atom_custom
     if opt == "Atom":
         return _create_atom_atom
+    elif opt == "StrictAtom":
+        return _create_atom_strict_atom
     elif opt == "str":
         return _create_atom_str
     elif opt == "bytes":
         return _create_atom_bytes
 
-    raise PyCodecError("Option 'atom' is '%s'; expected 'str', 'bytes', 'Atom'")
+    raise PyCodecError("Option 'atom' is '%s'; expected 'str', 'bytes', "
+                       "'Atom', StrictAtom")
 
 
 def _get_create_str_fn(opt: str) -> Callable:
@@ -183,7 +195,8 @@ def binary_to_term_2(data: bytes, options: dict = None) -> (any, bytes):
         helper function exists to assist with extracting an unicode string.
 
         Atoms are decoded to :py:class:`~Term.atom.Atom` or optionally to bytes
-        or to strings.
+        or to strings. If `atom_call` is provided that will be called and the
+        returned value will be used as representation if atoms
         Pids are decoded into :py:class:`~Term.pid.Pid`.
         Refs decoded to and :py:class:`~Term.reference.Reference`.
         Maps are decoded into Python ``dict``.
@@ -191,8 +204,11 @@ def binary_to_term_2(data: bytes, options: dict = None) -> (any, bytes):
         object and bitstrings into a pair of ``(bytes, last_byte_bits:int)``.
 
         :param options: dict(str, _);
-                * "atom": "str" | "bytes" | "Atom"; default "Atom".
+                * "atom": "str" | "bytes" | "Atom" | "StrictAtom"; default 
+                "Atom".
                   Returns atoms as strings, as bytes or as atom.Atom class objects
+                * "atom_call": callable object that will get str as input the 
+                  returned value will be used as atom representation
                * "byte_string": "str" | "bytes" | "int_list" (default "str").
                  Returns 8-bit strings as Python str or bytes or int list.
         :param data: Bytes containing encoded term without 131 header
@@ -205,7 +221,8 @@ def binary_to_term_2(data: bytes, options: dict = None) -> (any, bytes):
     if options is None:
         options = {}
 
-    create_atom_fn = _get_create_atom_fn(options.get("atom", "Atom"))
+    create_atom_fn = _get_create_atom_fn(options.get("atom", "Atom"), 
+                                         options.get("atom_call"))
     create_str_fn = _get_create_str_fn(options.get("byte_string", "str"))
 
     tag = data[0]
@@ -309,7 +326,7 @@ def binary_to_term_2(data: bytes, options: dict = None) -> (any, bytes):
         creation = tail[8]
 
         assert isinstance(node, Atom)
-        pid = Pid(node_name=node.text_,
+        pid = Pid(node_name=node,
                   id=id1,
                   serial=serial,
                   creation=creation)
@@ -324,7 +341,7 @@ def binary_to_term_2(data: bytes, options: dict = None) -> (any, bytes):
         id_len = 4 * term_len
         id1 = tail[1:id_len + 1]
 
-        ref = Reference(node_name=node.text_,
+        ref = Reference(node_name=node,
                         creation=creation,
                         refid=id1)
         return ref, tail[id_len + 1:]
@@ -634,7 +651,7 @@ def term_to_binary_2(val, encode_hook: [Callable, None]) -> bytes:
         return _pack_atom('undefined')
 
     elif isinstance(val, Atom):
-        return _pack_atom(val.text_)
+        return _pack_atom(val)
 
     elif isinstance(val, ImproperList):
         return _pack_list(val.elements_, val.tail_, encode_hook)
@@ -670,7 +687,7 @@ def term_to_binary_2(val, encode_hook: [Callable, None]) -> bytes:
 
 def term_to_binary(val, opt: Union[None, dict] = None) -> bytes:
     """ Prepend the 131 header byte to encoded data.
-        :param opt: 
+        :param opt:
             None or a dict with key value pairs (t,v) where t
             is a python type (as string, i.e. 'int' not int) and v a callable
             operating on an object of type t.

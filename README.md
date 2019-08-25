@@ -14,7 +14,57 @@ The extension or Python implementation is selected automatically when you import
 extension was not found, a warning will be logged and the Python implementation
 will be used.
 
-Documentation
+Atoms
+---
+
+The native representation of atoms are found in `term.atom`. There are Two
+classes, `Atom` and `StrictAtom`. `Atom` is the default, it will become an
+atom when converting back to `etf`, however it evaluates as string so it's
+possible to use a map with atom keys as keyword argument.
+
+The drawback of this is if you may have a map with both atoms and string
+/binaries with the same content
+
+```erlang
+#{foo => <<"atom">>, "foo" => <<"list">>}
+```
+Then you'll get
+```python
+In [1]: from term import codec
+
+In [2]: data = bytes([131,116,0, ...])
+
+In [3]: codec.binary_to_term(data)
+Out[3]: ({Atom('foo'): b'list'}, b'')
+```
+
+To allow for this we've added another atom type `StrictAtom` that will give you:
+```python
+In [4]: codec.binary_to_term(data, {'atom': "StrictAtom"})
+Out[4]: ({StrictAtom('foo'): b'atom', 'foo': b'list'}, b'')
+
+```
+Still `StrictAtom('foo') == 'foo'` so it you need something different still, you
+can put in your custom atom class
+
+```python
+In [5]: class A:
+   ...:     def __init__(self, s):
+   ...:         self._s = s
+   ...:     def __repr__(self):
+   ...:         return 'A({})'.format(self._s)
+   ...:
+
+In [6]: codec.binary_to_term(data, {'atom_call': A})
+Out[6]: ({A(foo): b'atom', 'foo': b'list'}, b'')
+
+```
+The `'atom_call'` option takes any callable that takes a string as input, and
+the return value will be used for the atom representation. Only `Atom` and
+`StrictAtom` can be natively parsed back to atom when decoded. If you roll your
+own, make sure to use `encode_hook` when encoding.
+
+More Documentation
 -------------
 
 Here: https://pyrlang.github.io/Term/
