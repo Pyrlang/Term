@@ -14,6 +14,34 @@ The extension or Python implementation is selected automatically when you import
 extension was not found, a warning will be logged and the Python implementation
 will be used.
 
+Installing
+---
+
+If you just run
+
+```
+pip install pyrlang-term
+```
+
+The pure python version will be installed unless there exists a pre built
+binary.
+
+If you want to build the native one, you'll need rust and a few more packages.
+
+To install rust (from https://www.rust-lang.org/tools/install):
+
+```
+curl https://sh.rustup.rs -sSf | sh
+```
+
+Then install the build requirements before installing pyrlang-term:
+
+```
+pip install setuptools-rust semantic_version
+pip install pyrlang-term
+```
+
+
 Atoms
 ---
 

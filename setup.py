@@ -1,10 +1,11 @@
 from setuptools import setup
 
-VERSION = '1.1'
-PKGNAME = "term"
+VERSION = '1.2'
+PKGNAME = "pyrlang-term"
+MODULENAME = "term"
 DESCR = 'Erlang term and External Term Format codec in Python and native Rust extension'
-AUTHOR = 'Erlang Solutions Ltd and S2HC Sweden AB',
-AUTHOR_EMAIL = 'dmytro.lytovchenko@gmail.com,pyrlang@s2hc.com',
+AUTHOR = 'Erlang Solutions Ltd and S2HC Sweden AB'
+AUTHOR_EMAIL = 'dmytro.lytovchenko@gmail.com, pyrlang@s2hc.com'
 
 try:
     from setuptools_rust import Binding, RustExtension
@@ -16,7 +17,7 @@ try:
           author_email=AUTHOR_EMAIL,
           rust_extensions=[RustExtension("term.native_codec_impl",
                                          binding=Binding.RustCPython)],
-          packages=[PKGNAME],
+          packages=[MODULENAME],
           # rust extensions are not zip safe, just like C-extensions.
           zip_safe=False)
 except:
@@ -29,4 +30,4 @@ except:
           description=DESCR,
           author=AUTHOR,
           author_email=AUTHOR_EMAIL,
-          packages=[PKGNAME])
+          packages=[MODULENAME])
