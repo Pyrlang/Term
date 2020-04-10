@@ -63,6 +63,9 @@ TAG_SMALL_INT = 97
 TAG_SMALL_TUPLE_EXT = 104
 TAG_STRING_EXT = 107
 
+TAG_NEW_PID_EXT = 88
+TAG_NEWER_REF_EXT = 90
+
 
 # This is Python variant of codec exception when Python impl is used.
 # Otherwise native lib defines its own exception with same name.
@@ -332,6 +335,19 @@ def binary_to_term_2(data: bytes, options: dict = None) -> (any, bytes):
                   creation=creation)
         return pid, tail[9:]
 
+    if tag == TAG_NEW_PID_EXT:
+        node, tail = binary_to_term_2(data[1:])
+        id1 = util.u32(tail, 0)
+        serial = util.u32(tail, 4)
+        creation = util.u32(tail, 8)
+
+        assert isinstance(node, Atom)
+        pid = Pid(node_name=node,
+                  id=id1,
+                  serial=serial,
+                  creation=creation)
+        return pid, tail[13:]
+
     if tag == TAG_NEW_REF_EXT:
         if len(data) < 2:
             return incomplete_data("decoding length for a new-ref")
@@ -345,6 +361,20 @@ def binary_to_term_2(data: bytes, options: dict = None) -> (any, bytes):
                         creation=creation,
                         refid=id1)
         return ref, tail[id_len + 1:]
+
+    if tag == TAG_NEWER_REF_EXT:
+        if len(data) < 2:
+            return incomplete_data("decoding length for a newer-ref")
+        term_len = util.u16(data, 1)
+        node, tail = binary_to_term_2(data[3:])
+        creation = util.u32(tail, 0)
+        id_len = 4 * term_len
+        id1 = tail[4:id_len + 4]
+
+        ref = Reference(node_name=node,
+                        creation=creation,
+                        refid=id1)
+        return ref, tail[id_len + 4:]
 
     if tag == TAG_MAP_EXT:
         if len(data) < 5:
@@ -508,20 +538,20 @@ def _pack_atom(text: str) -> bytes:
 
 # TODO: maybe move this into pid class
 def _pack_pid(val) -> bytes:
-    data = bytes([TAG_PID_EXT]) + \
+    data = bytes([TAG_NEW_PID_EXT]) + \
            _pack_atom(val.node_name_) + \
            util.to_u32(val.id_) + \
            util.to_u32(val.serial_) + \
-           bytes([val.creation_])
+           util.to_u32(val.creation_)
     return data
 
 
 # TODO: maybe move this into ref class
 def _pack_ref(val) -> bytes:
-    data = bytes([TAG_NEW_REF_EXT]) \
+    data = bytes([TAG_NEWER_REF_EXT]) \
            + util.to_u16(len(val.id_) // 4) \
            + _pack_atom(val.node_name_) \
-           + bytes([val.creation_]) \
+           + util.to_u32(val.creation_) \
            + val.id_
     return data
 

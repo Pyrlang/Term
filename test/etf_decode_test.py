@@ -248,6 +248,22 @@ class TestETFDecode(unittest.TestCase):
 
     # ----------------
 
+    def test_decode_new_pid_py(self):
+        self._decode_new_pid(py_impl)
+
+    def test_decode_new_pid_native(self):
+        self._decode_new_pid(native_impl)
+
+    def _decode_new_pid(self, codec):
+        """ Try a new pid """
+        data = bytes([131, 88, 100, 0, 13, 101, 114, 108, 64, 49, 50, 55, 46,
+                      48, 46, 48, 46, 49, 0, 0, 0, 64, 0, 0, 0, 0, 0, 0, 0, 1])
+        (val, tail) = codec.binary_to_term(data, None)
+        self.assertTrue(isinstance(val, Pid))
+        self.assertEqual(tail, b'')
+
+    # ----------------
+
     def test_decode_ref_py(self):
         self._decode_ref(py_impl)
 
@@ -259,6 +275,23 @@ class TestETFDecode(unittest.TestCase):
         b1 = bytes([131, 114, 0, 3, 100, 0, 13, 101, 114, 108, 64, 49, 50,
                     55, 46, 48, 46, 48, 46, 49, 1, 0, 0, 1, 58, 0, 0, 0, 2,
                     0, 0, 0, 0])
+        (t1, tail) = codec.binary_to_term(b1, None)
+        self.assertTrue(isinstance(t1, Reference))
+        self.assertEqual(tail, b'')
+
+    # ----------------
+
+    def test_decode_newer_ref_py(self):
+        self._decode_newer_ref(py_impl)
+
+    def test_decode_newer_ref_native(self):
+        self._decode_newer_ref(native_impl)
+
+    def _decode_newer_ref(self, codec):
+        """ Try a newer reference """
+        b1 = bytes([131, 90, 0, 3, 100, 0, 13, 101, 114, 108, 64, 49, 50,
+                    55, 46, 48, 46, 48, 46, 49, 0, 0, 0, 1, 0, 0, 1, 58,
+                    0, 0, 0, 2, 0, 0, 0, 0])
         (t1, tail) = codec.binary_to_term(b1, None)
         self.assertTrue(isinstance(t1, Reference))
         self.assertEqual(tail, b'')

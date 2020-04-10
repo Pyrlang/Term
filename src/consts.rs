@@ -47,3 +47,6 @@ pub const TAG_SMALL_BIG_EXT: u8 = 110;
 pub const TAG_SMALL_UINT: u8 = 97;
 pub const TAG_SMALL_TUPLE_EXT: u8 = 104;
 pub const TAG_STRING_EXT: u8 = 107;
+
+pub const TAG_NEW_PID_EXT: u8 = 88;
+pub const TAG_NEWER_REF_EXT: u8 = 90;
