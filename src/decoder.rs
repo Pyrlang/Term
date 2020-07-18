@@ -607,7 +607,6 @@ impl <'a> Decoder<'a> {
     let (node, tail1) = self.decode(&in_bytes[*offset..])?;
     self.atom_representation = save_repr;
 
-    //let creation: u32 = tail1.read_with::<u32>(offset, byte::BE)?;
     let creation: u32 = BigEndian::read_u32(tail1);
     let last_index = 4 + (term_len as usize) * 4;
 
