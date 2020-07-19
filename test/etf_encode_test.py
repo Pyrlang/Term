@@ -181,12 +181,12 @@ class TestETFEncode(unittest.TestCase):
 
     def _encode_pid(self, codec):
         sample1 = bytes([py_impl.ETF_VERSION_TAG,
-                         py_impl.TAG_PID_EXT,
+                         py_impl.TAG_NEW_PID_EXT,
                          py_impl.TAG_SMALL_ATOM_UTF8_EXT, 13]) \
                   + bytes("nonode@nohost", "latin-1") \
                   + bytes([0, 0, 0, 1,
                            0, 0, 0, 2,
-                           3])
+                           0, 0, 0, 3])
         val = Pid("nonode@nohost", 1, 2, 3)
         bin1 = codec.term_to_binary(val, None)
         self.assertEqual(bin1, sample1)
@@ -202,11 +202,11 @@ class TestETFEncode(unittest.TestCase):
     def _encode_ref(self, codec):
         creation = 1
         sample1 = bytes([py_impl.ETF_VERSION_TAG,
-                         py_impl.TAG_NEW_REF_EXT,
+                         py_impl.TAG_NEWER_REF_EXT,
                          0, 3,  # length
                          py_impl.TAG_SMALL_ATOM_UTF8_EXT, 13,
                          110, 111, 110, 111, 100, 101, 64, 110, 111, 104, 111, 115, 116,
-                         creation]) \
+                         0, 0, 0, creation]) \
                   + bytes("fgsfdsfdsfgs", "latin-1")
 
         val = Reference("nonode@nohost", creation, b'fgsfdsfdsfgs')

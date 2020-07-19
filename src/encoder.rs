@@ -356,13 +356,13 @@ impl<'a> Encoder<'a> {
     let serial: u32 = FromPyObject::extract(self.py, &py_serial)?;
 
     let py_creation = py_pid.getattr(self.py, "creation_")?;
-    let creation: u8 = FromPyObject::extract(self.py, &py_creation)?;
+    let creation: u32 = FromPyObject::extract(self.py, &py_creation)?;
 
-    self.data.push(consts::TAG_PID_EXT);
+    self.data.push(consts::TAG_NEW_PID_EXT);
     self.write_atom_from_cow(node_name.to_string(self.py)?);
     self.data.write_u32::<BigEndian>(id);
     self.data.write_u32::<BigEndian>(serial);
-    self.data.push(creation);
+    self.data.write_u32::<BigEndian>(creation);
 
     Ok(())
   }
@@ -381,12 +381,12 @@ impl<'a> Encoder<'a> {
     let id = py_id.data(self.py);
 
     let py_creation = py_ref.getattr(self.py, "creation_")?;
-    let creation: u8 = FromPyObject::extract(self.py, &py_creation)?;
+    let creation: u32 = FromPyObject::extract(self.py, &py_creation)?;
 
-    self.data.push(consts::TAG_NEW_REF_EXT);
+    self.data.push(consts::TAG_NEWER_REF_EXT);
     self.data.write_u16::<BigEndian>((id.len() / 4) as u16);
     self.write_atom_from_cow(node_name.to_string(self.py)?);
-    self.data.push(creation);
+    self.data.write_u32::<BigEndian>(creation);
     self.data.write(id);
 
     Ok(())

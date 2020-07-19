@@ -15,6 +15,7 @@
 use cpython::*;
 use byte::BytesExt;
 use byte::ctx::Str;
+use byteorder::{ByteOrder, BigEndian};
 use compress::zlib;
 use std::io::{Read, BufReader};
 use std::str;
@@ -161,7 +162,9 @@ impl <'a> Decoder<'a> {
         self.parse_tuple(&in_bytes[5..], arity as usize)
       },
       consts::TAG_PID_EXT => self.parse_pid(tail),
+      consts::TAG_NEW_PID_EXT => self.parse_new_pid(tail),
       consts::TAG_NEW_REF_EXT => self.parse_ref(tail),
+      consts::TAG_NEWER_REF_EXT => self.parse_newer_ref(tail),
       consts::TAG_NEW_FUN_EXT => self.parse_fun(tail),
       _ => Err(CodecError::UnknownTermTagByte { b: tag }),
     };
@@ -543,6 +546,28 @@ impl <'a> Decoder<'a> {
   }
 
 
+  /// Given input _after_ the NEW_PID tag byte, parse an external pid
+  #[inline]
+  fn parse_new_pid<'inp>(&mut self, in_bytes: &'inp [u8]) -> CodecResult<(PyObject, &'inp [u8])>
+  {
+    // Temporarily switch atom representation to binary and then decode node
+    let save_repr = self.atom_representation;
+    self.atom_representation = AtomRepresentation::Str;
+    let (node, tail1) = self.decode(in_bytes)?;
+    self.atom_representation = save_repr;
+
+    let offset = &mut 0usize;
+    let id: u32 = tail1.read_with::<u32>(offset, byte::BE)?;
+    let serial: u32 = tail1.read_with::<u32>(offset, byte::BE)?;
+    let creation: u32 = tail1.read_with::<u32>(offset, byte::BE)?;
+
+    let remaining = &tail1[*offset..];
+    let pid_obj = self.get_pid_pyclass();
+    let py_pid = pid_obj.call(self.py, (node, id, serial, creation), None)?;
+    Ok((py_pid.into_object(), remaining))
+  }
+
+
   /// Given input _after_ the Reference tag byte, parse an external reference
   #[inline]
   fn parse_ref<'inp>(&mut self, in_bytes: &'inp [u8]) -> CodecResult<(PyObject, &'inp [u8])>
@@ -560,6 +585,32 @@ impl <'a> Decoder<'a> {
     let last_index = 1 + (term_len as usize) * 4;
 
     let id: &[u8] = &tail1[1..last_index];
+    let bytes_id = PyBytes::new(self.py, id);
+
+    let remaining = &tail1[last_index..];
+    let ref_obj = self.get_ref_pyclass();
+    let py_ref = ref_obj.call(self.py, (node, creation, bytes_id), None)?;
+    Ok((py_ref.into_object(), remaining))
+  }
+
+
+  /// Given input _after_ the Newer Reference tag byte, parse an external reference
+  #[inline]
+  fn parse_newer_ref<'inp>(&mut self, in_bytes: &'inp [u8]) -> CodecResult<(PyObject, &'inp [u8])>
+  {
+    let offset = &mut 0usize;
+    let term_len: u16 = in_bytes.read_with::<u16>(offset, byte::BE)?;
+
+    // Temporarily switch atom representation to binary and then decode node
+    let save_repr = self.atom_representation;
+    self.atom_representation = AtomRepresentation::Str;
+    let (node, tail1) = self.decode(&in_bytes[*offset..])?;
+    self.atom_representation = save_repr;
+
+    let creation: u32 = BigEndian::read_u32(tail1);
+    let last_index = 4 + (term_len as usize) * 4;
+
+    let id: &[u8] = &tail1[4..last_index];
     let bytes_id = PyBytes::new(self.py, id);
 
     let remaining = &tail1[last_index..];
