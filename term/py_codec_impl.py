@@ -346,7 +346,7 @@ def binary_to_term_2(data: bytes, options: dict = None) -> (any, bytes):
                   id=id1,
                   serial=serial,
                   creation=creation)
-        return pid, tail[13:]
+        return pid, tail[12:]
 
     if tag == TAG_NEW_REF_EXT:
         if len(data) < 2:
