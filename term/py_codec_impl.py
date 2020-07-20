@@ -16,6 +16,7 @@
     used by the network distribution layer.
 """
 
+import math
 import struct
 from typing import Callable, Union
 
@@ -552,7 +553,9 @@ def _can_be_a_bytestring(val: str) -> bool:
     return True
 
 
-def _pack_float(val):
+def _pack_float(val: float) -> bytes:
+    if not math.isfinite(val):
+        raise PyCodecError("Float value %s is not finite" % val)
     return bytes([TAG_NEW_FLOAT_EXT]) + struct.pack(">d", val)
 
 
