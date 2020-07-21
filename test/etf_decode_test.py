@@ -11,6 +11,15 @@ from term.list import list_to_unicode_str
 
 
 class TestETFDecode(unittest.TestCase):
+    # Sentinel used to verify that post-decoded tails are preserved properly
+    EXPECTED_TAIL_BYTES = bytes([1, 2, 3, 4, 5])
+
+    def _etf_bytes(self, b):
+        return bytes(b) + self.EXPECTED_TAIL_BYTES
+
+    def assertExpectedTail(self, tail):
+        self.assertEqual(tail, self.EXPECTED_TAIL_BYTES)
+
     def test_decode_atom_py(self):
         self._decode_atom(py_impl)
         self._decode_atom_utf8(py_impl)
@@ -23,31 +32,31 @@ class TestETFDecode(unittest.TestCase):
         """ Try an atom 'hello' encoded as Latin1 atom (16-bit length)
             or small atom (8bit length)
         """
-        b1 = bytes([131, py_impl.TAG_ATOM_EXT,
-                    0, 5,
-                    104, 101, 108, 108, 111])
+        b1 = self._etf_bytes([131, py_impl.TAG_ATOM_EXT,
+                              0, 5,
+                              104, 101, 108, 108, 111])
         (t1, tail1) = codec.binary_to_term(b1, None)
         self.assertTrue(isinstance(t1, Atom), "Result must be Atom object")
         self.assertEqual(t1, "hello")
-        self.assertEqual(tail1, b'')
+        self.assertExpectedTail(tail1)
 
-        b2 = bytes([131, py_impl.TAG_SMALL_ATOM_EXT,
-                    5,
-                    104, 101, 108, 108, 111])
+        b2 = self._etf_bytes([131, py_impl.TAG_SMALL_ATOM_EXT,
+                              5,
+                              104, 101, 108, 108, 111])
         (t2, tail2) = codec.binary_to_term(b2, None)
         self.assertTrue(isinstance(t2, Atom), "Result must be Atom object")
         self.assertEqual(t2, "hello")
-        self.assertEqual(tail2, b'')
+        self.assertExpectedTail(tail2)
 
     def _decode_atom_utf8(self, codec):
-        b1 = bytes([131, py_impl.TAG_ATOM_UTF8_EXT,
-                    0, 6,
-                    108, 195, 164, 103, 101, 116])
+        b1 = self._etf_bytes([131, py_impl.TAG_ATOM_UTF8_EXT,
+                              0, 6,
+                              108, 195, 164, 103, 101, 116])
         (t1, tail1) = codec.binary_to_term(b1, None)
         self.assertTrue(isinstance(t1, Atom), "Result must be Atom object")
         self.assertTrue(isinstance(t1, str), "Result must be str")
         self.assertEqual(t1, u"läget")
-        self.assertEqual(tail1, b'')
+        self.assertExpectedTail(tail1)
 
     # ----------------
 
@@ -59,20 +68,20 @@ class TestETFDecode(unittest.TestCase):
 
     def _decode_atom_as_string(self, codec):
         """ Try an atom 'hello' to a Python string """
-        b1 = bytes([131, py_impl.TAG_ATOM_EXT,
-                    0, 5,
-                    104, 101, 108, 108, 111])
+        b1 = self._etf_bytes([131, py_impl.TAG_ATOM_EXT,
+                              0, 5,
+                              104, 101, 108, 108, 111])
         (t2, tail2) = codec.binary_to_term(b1, {"atom": "str"})
         self.assertTrue(isinstance(t2, str),
                         "Expected str, have: " + t2.__class__.__name__)
         self.assertEqual(t2, "hello")
-        self.assertEqual(tail2, b'')
+        self.assertExpectedTail(tail2)
 
         (t3, tail3) = codec.binary_to_term(b1, {"atom": "bytes"})
         self.assertTrue(isinstance(t3, bytes),
                         "Expected bytes, have: " + t3.__class__.__name__)
         self.assertEqual(t3, b'hello')
-        self.assertEqual(tail3, b'')
+        self.assertExpectedTail(tail3)
 
     # ----------------
 
@@ -83,23 +92,23 @@ class TestETFDecode(unittest.TestCase):
         self._decode_atom_as_strict(native_impl)
 
     def _decode_atom_as_strict(self, codec):
-        b1 = bytes([131, py_impl.TAG_ATOM_EXT,
-                    0, 5,
-                    104, 101, 108, 108, 111])
+        b1 = self._etf_bytes([131, py_impl.TAG_ATOM_EXT,
+                              0, 5,
+                              104, 101, 108, 108, 111])
         (t1, tail1) = codec.binary_to_term(b1, {"atom": "StrictAtom"})
         self.assertTrue(isinstance(t1, StrictAtom), "Result must be StrictAtom "
                                                     "got {}".format(type(t1)))
         self.assertEqual(t1, "hello")
-        self.assertEqual(tail1, b'')
+        self.assertExpectedTail(tail1)
 
-        b2 = bytes([131, py_impl.TAG_SMALL_ATOM_EXT,
-                    5,
-                    104, 101, 108, 108, 111])
+        b2 = self._etf_bytes([131, py_impl.TAG_SMALL_ATOM_EXT,
+                              5,
+                              104, 101, 108, 108, 111])
         (t2, tail2) = codec.binary_to_term(b2, {"atom": "StrictAtom"})
         self.assertTrue(isinstance(t2, StrictAtom), "Result must be Atom "
                                                     "object")
         self.assertEqual(t2, "hello")
-        self.assertEqual(tail2, b'')
+        self.assertExpectedTail(tail2)
 
     # ----------------
 
@@ -112,21 +121,21 @@ class TestETFDecode(unittest.TestCase):
         self._decode_atom_custom_class(native_impl)
 
     def _decode_atom_custom_callable(self, codec):
-        b1 = bytes([131, py_impl.TAG_ATOM_EXT,
-                    0, 5,
-                    104, 101, 108, 108, 111])
+        b1 = self._etf_bytes([131, py_impl.TAG_ATOM_EXT,
+                              0, 5,
+                              104, 101, 108, 108, 111])
 
         a_fun = lambda x: bytes(x.encode('utf8'))
         (t1, tail1) = codec.binary_to_term(b1, {"atom_call": a_fun})
         self.assertTrue(isinstance(t1, bytes))
         self.assertEqual(t1, b"hello")
-        self.assertEqual(tail1, b'')
+        self.assertExpectedTail(tail1)
 
     def _decode_atom_custom_class(self, codec):
 
-        b1 = bytes([131, py_impl.TAG_ATOM_EXT,
-                    0, 5,
-                    104, 101, 108, 108, 111])
+        b1 = self._etf_bytes([131, py_impl.TAG_ATOM_EXT,
+                              0, 5,
+                              104, 101, 108, 108, 111])
 
         class A(str):
             pass
@@ -138,25 +147,25 @@ class TestETFDecode(unittest.TestCase):
         (t1, tail1) = codec.binary_to_term(b1, {"atom_call": str})
         self.assertTrue(isinstance(t1, str))
         self.assertEqual(t1, "hello")
-        self.assertEqual(tail1, b'')
+        self.assertExpectedTail(tail1)
 
         (t2, tail2) = codec.binary_to_term(b1, {"atom_call": A})
         self.assertTrue(isinstance(t2, str))
         self.assertTrue(isinstance(t2, A))
-        self.assertEqual(t1, "hello")
-        self.assertEqual(tail1, b'')
+        self.assertEqual(t2, "hello")
+        self.assertExpectedTail(tail2)
 
         (t3, tail3) = codec.binary_to_term(b1, {"atom_call": B})
         self.assertTrue(isinstance(t3, B))
         self.assertEqual(t3._text, "hello")
-        self.assertEqual(tail1, b'')
+        self.assertExpectedTail(tail3)
 
     # ----------------
 
     def test_ref_count_leak_on_custom_atom(self):
-        b = bytes([131, py_impl.TAG_ATOM_EXT,
-                   0, 5,
-                   104, 101, 108, 108, 111])
+        b = self._etf_bytes([131, py_impl.TAG_ATOM_EXT,
+                             0, 5,
+                             104, 101, 108, 108, 111])
 
         def test_fun(codec, b_data):
             class A(str):
@@ -172,7 +181,6 @@ class TestETFDecode(unittest.TestCase):
         p_type_refs = sys.getrefcount(p_type)
         n_type = type(n_res)
         n_type_refs = sys.getrefcount(n_type)
-        print('\n', p_type, p_type_refs, n_type, n_type_refs)
         self.assertEqual(p_res, n_res)
         self.assertEqual(p_tail, n_tail)
         self.assertNotEqual(p_type, n_type)
@@ -192,43 +200,44 @@ class TestETFDecode(unittest.TestCase):
 
     def _decode_str_ascii(self, codec):
         """ A string with bytes, encoded as optimized byte array. """
-        b1 = bytes([131, py_impl.TAG_STRING_EXT,
-                    0, 5,
-                    104, 101, 108, 108, 111])
+        b1 = self._etf_bytes([131, py_impl.TAG_STRING_EXT,
+                              0, 5,
+                              104, 101, 108, 108, 111])
         (t1, tail1) = codec.binary_to_term(b1, None)
         self.assertTrue(isinstance(t1, str), "Result must be str")
         self.assertEqual(t1, "hello")
-        self.assertEqual(tail1, b'')
+        self.assertExpectedTail(tail1)
 
         (t2, tail2) = codec.binary_to_term(b1, {"byte_string": "bytes"})
         self.assertTrue(isinstance(t2, bytes),
                         "Result must be bytes, got " + t2.__class__.__name__)
         self.assertEqual(t2, b"hello")
-        self.assertEqual(tail2, b'')
+        self.assertExpectedTail(tail2)
 
 
     def _decode_str_int_list(self, codec):
         """ A string with bytes, encoded as optimized byte array. """
-        b1 = bytes([131, py_impl.TAG_STRING_EXT,
-                    0, 5,
-                    104, 101, 108, 108, 111])
+        b1 = self._etf_bytes([131, py_impl.TAG_STRING_EXT,
+                              0, 5,
+                              104, 101, 108, 108, 111])
         (t1, tail1) = codec.binary_to_term(b1, {"byte_string": "int_list"})
         self.assertEqual(t1, [104, 101, 108, 108, 111])
-        self.assertEqual(tail1, b'')
+        self.assertExpectedTail(tail1)
 
     def _decode_str_unicode(self, codec):
         """ A string with emoji, encoded as a list of unicode integers. """
-        b1 = bytes([131, py_impl.TAG_LIST_EXT,
-                    0, 0, 0, 3,  # length
-                    py_impl.TAG_INT, 0, 0, 38, 34,  # 32-bit radiation hazard
-                    py_impl.TAG_SMALL_INT, 32,      # 8-bit space (32)
-                    py_impl.TAG_INT, 0, 0, 38, 35,  # 32-bit bio-hazard
-                    py_impl.TAG_NIL_EXT  # list tail: NIL
-                    ])
+        b1 = self._etf_bytes([
+            131, py_impl.TAG_LIST_EXT,
+            0, 0, 0, 3,                         # length
+            py_impl.TAG_INT, 0, 0, 38, 34,      # 32-bit radiation hazard
+            py_impl.TAG_SMALL_INT, 32,          # 8-bit space (32)
+            py_impl.TAG_INT, 0, 0, 38, 35,      # 32-bit bio-hazard
+            py_impl.TAG_NIL_EXT                 # list tail: NIL
+        ])
         (t1, tail) = codec.binary_to_term(b1, None)
         self.assertTrue(isinstance(t1, list), "Result must be a list")
-        self.assertEqual(tail, b'')
         self.assertEqual(list_to_unicode_str(t1), u"☢ ☣")
+        self.assertExpectedTail(tail)
 
     # ----------------
 
@@ -240,11 +249,13 @@ class TestETFDecode(unittest.TestCase):
 
     def _decode_pid(self, codec):
         """ Try a pid """
-        data = bytes([131, 103, 100, 0, 13, 101, 114, 108, 64, 49, 50, 55, 46,
-                      48, 46, 48, 46, 49, 0, 0, 0, 64, 0, 0, 0, 0, 1])
+        data = self._etf_bytes([
+            131, 103, 100, 0, 13, 101, 114, 108, 64, 49, 50, 55, 46,
+            48, 46, 48, 46, 49, 0, 0, 0, 64, 0, 0, 0, 0, 1
+        ])
         (val, tail) = codec.binary_to_term(data, None)
         self.assertTrue(isinstance(val, Pid))
-        self.assertEqual(tail, b'')
+        self.assertExpectedTail(tail)
 
     # ----------------
 
@@ -256,11 +267,13 @@ class TestETFDecode(unittest.TestCase):
 
     def _decode_new_pid(self, codec):
         """ Try a new pid """
-        data = bytes([131, 88, 100, 0, 13, 101, 114, 108, 64, 49, 50, 55, 46,
-                      48, 46, 48, 46, 49, 0, 0, 0, 64, 0, 0, 0, 0, 0, 0, 0, 1])
+        data = self._etf_bytes([
+            131, 88, 100, 0, 13, 101, 114, 108, 64, 49, 50, 55, 46,
+            48, 46, 48, 46, 49, 0, 0, 0, 64, 0, 0, 0, 0, 0, 0, 0, 1
+        ])
         (val, tail) = codec.binary_to_term(data, None)
         self.assertTrue(isinstance(val, Pid))
-        self.assertEqual(tail, b'')
+        self.assertExpectedTail(tail)
 
     # ----------------
 
@@ -272,12 +285,14 @@ class TestETFDecode(unittest.TestCase):
 
     def _decode_ref(self, codec):
         """ Try a reference """
-        b1 = bytes([131, 114, 0, 3, 100, 0, 13, 101, 114, 108, 64, 49, 50,
-                    55, 46, 48, 46, 48, 46, 49, 1, 0, 0, 1, 58, 0, 0, 0, 2,
-                    0, 0, 0, 0])
+        b1 = self._etf_bytes([
+            131, 114, 0, 3, 100, 0, 13, 101, 114, 108, 64, 49, 50,
+            55, 46, 48, 46, 48, 46, 49, 1, 0, 0, 1, 58, 0, 0, 0, 2,
+            0, 0, 0, 0
+        ])
         (t1, tail) = codec.binary_to_term(b1, None)
         self.assertTrue(isinstance(t1, Reference))
-        self.assertEqual(tail, b'')
+        self.assertExpectedTail(tail)
 
     # ----------------
 
@@ -289,12 +304,14 @@ class TestETFDecode(unittest.TestCase):
 
     def _decode_newer_ref(self, codec):
         """ Try a newer reference """
-        b1 = bytes([131, 90, 0, 3, 100, 0, 13, 101, 114, 108, 64, 49, 50,
-                    55, 46, 48, 46, 48, 46, 49, 0, 0, 0, 1, 0, 0, 1, 58,
-                    0, 0, 0, 2, 0, 0, 0, 0])
+        b1 = self._etf_bytes([
+            131, 90, 0, 3, 100, 0, 13, 101, 114, 108, 64, 49, 50,
+            55, 46, 48, 46, 48, 46, 49, 0, 0, 0, 1, 0, 0, 1, 58,
+            0, 0, 0, 2, 0, 0, 0, 0
+        ])
         (t1, tail) = codec.binary_to_term(b1, None)
         self.assertTrue(isinstance(t1, Reference))
-        self.assertEqual(tail, b'')
+        self.assertExpectedTail(tail)
 
     # ----------------
 
@@ -306,27 +323,27 @@ class TestETFDecode(unittest.TestCase):
 
     def _decode_tuple(self, codec):
         """ Try decode some tuple values """
-        data1 = bytes([131, py_impl.TAG_SMALL_TUPLE_EXT,
-                       2,
-                       py_impl.TAG_SMALL_INT, 1,
-                       py_impl.TAG_ATOM_EXT, 0, 2, 111, 107])
+        data1 = self._etf_bytes([131, py_impl.TAG_SMALL_TUPLE_EXT,
+                                 2,
+                                 py_impl.TAG_SMALL_INT, 1,
+                                 py_impl.TAG_ATOM_EXT, 0, 2, 111, 107])
         (val1, tail1) = codec.binary_to_term(data1, None)
         self.assertEqual((1, Atom("ok")), val1)
-        self.assertEqual(tail1, b'')
+        self.assertExpectedTail(tail1)
 
-        data2 = bytes([131, py_impl.TAG_LARGE_TUPLE_EXT,
-                       0, 0, 0, 2,
-                       py_impl.TAG_SMALL_INT, 1,
-                       py_impl.TAG_ATOM_EXT, 0, 2, 111, 107])
+        data2 = self._etf_bytes([131, py_impl.TAG_LARGE_TUPLE_EXT,
+                                 0, 0, 0, 2,
+                                 py_impl.TAG_SMALL_INT, 1,
+                                 py_impl.TAG_ATOM_EXT, 0, 2, 111, 107])
         (val2, tail2) = codec.binary_to_term(data2, None)
         self.assertEqual((1, Atom("ok")), val2)
-        self.assertEqual(tail2, b'')
+        self.assertExpectedTail(tail2)
 
         # Empty tuple
-        data3 = bytes([131, py_impl.TAG_SMALL_TUPLE_EXT, 0])
+        data3 = self._etf_bytes([131, py_impl.TAG_SMALL_TUPLE_EXT, 0])
         (val3, tail3) = codec.binary_to_term(data3, None)
         self.assertEqual((), val3)
-        self.assertEqual(tail3, b'')
+        self.assertExpectedTail(tail3)
 
 
 # ----------------
@@ -339,23 +356,23 @@ class TestETFDecode(unittest.TestCase):
 
     def _decode_list(self, codec):
         """ Try decode some list values """
-        data1 = bytes([131, py_impl.TAG_NIL_EXT])
+        data1 = self._etf_bytes([131, py_impl.TAG_NIL_EXT])
         (val1, tail1) = codec.binary_to_term(data1, None)
         self.assertEqual([], val1)
-        self.assertEqual(tail1, b'')
+        self.assertExpectedTail(tail1)
 
         # Test data is [1, ok]
-        data2 = bytes([131, py_impl.TAG_LIST_EXT,
-                       0, 0, 0, 2,
-                       py_impl.TAG_SMALL_INT, 1,
-                       py_impl.TAG_ATOM_EXT, 0, 2, 111, 107,
-                       py_impl.TAG_NIL_EXT])
+        data2 = self._etf_bytes([131, py_impl.TAG_LIST_EXT,
+                                 0, 0, 0, 2,
+                                 py_impl.TAG_SMALL_INT, 1,
+                                 py_impl.TAG_ATOM_EXT, 0, 2, 111, 107,
+                                 py_impl.TAG_NIL_EXT])
         (val2, tail2) = codec.binary_to_term(data2, None)
         self.assertTrue(isinstance(val2, list),
                         "Expected list, got: %s (%s)"
                         % (val2.__class__.__name__, val2))
         self.assertEqual(val2, [1, Atom("ok")])
-        self.assertEqual(tail2, b'')
+        self.assertExpectedTail(tail2)
 
     # ----------------
 
@@ -367,16 +384,18 @@ class TestETFDecode(unittest.TestCase):
 
     def _decode_map(self, codec):
         """ Try a map #{1 => 2, ok => error} """
-        data = bytes([131,
-                      py_impl.TAG_MAP_EXT, 0, 0, 0, 2,
-                      py_impl.TAG_SMALL_INT, 1,
-                      py_impl.TAG_SMALL_INT, 2,
-                      py_impl.TAG_ATOM_EXT, 0, 2, 111, 107,
-                      py_impl.TAG_ATOM_EXT, 0, 5, 101, 114, 114, 111, 114])
+        data = self._etf_bytes([
+            131,
+            py_impl.TAG_MAP_EXT, 0, 0, 0, 2,
+            py_impl.TAG_SMALL_INT, 1,
+            py_impl.TAG_SMALL_INT, 2,
+            py_impl.TAG_ATOM_EXT, 0, 2, 111, 107,
+            py_impl.TAG_ATOM_EXT, 0, 5, 101, 114, 114, 111, 114
+        ])
         (val, tail) = codec.binary_to_term(data, None)
         self.assertTrue(isinstance(val, dict))
         self.assertEqual(val, {1: 2, Atom("ok"): Atom("error")})
-        self.assertEqual(tail, b'')
+        self.assertExpectedTail(tail)
 
     # ----------------
 
@@ -388,18 +407,22 @@ class TestETFDecode(unittest.TestCase):
 
     def _float(self, codec):
         """ Try decode a prepared double Pi """
-        data = bytes([py_impl.ETF_VERSION_TAG,
-                      py_impl.TAG_NEW_FLOAT_EXT,  # a 8-byte IEEE double
-                      64, 9, 33, 251, 84, 68, 45, 17])
-        negative = bytes([py_impl.ETF_VERSION_TAG,
-                          py_impl.TAG_NEW_FLOAT_EXT,
-                          192, 71, 188, 40, 245, 194, 143, 92])
+        data = self._etf_bytes([
+            py_impl.ETF_VERSION_TAG,
+            py_impl.TAG_NEW_FLOAT_EXT,  # a 8-byte IEEE double
+            64, 9, 33, 251, 84, 68, 45, 17
+        ])
+        negative = self._etf_bytes([
+            py_impl.ETF_VERSION_TAG,
+            py_impl.TAG_NEW_FLOAT_EXT,
+            192, 71, 188, 40, 245, 194, 143, 92
+        ])
         (val, tail) = codec.binary_to_term(data, None)
         (nval, ntail) = codec.binary_to_term(negative, None)
         self.assertEqual(val, 3.14159265358979)
-        self.assertEqual(tail, b'')
+        self.assertExpectedTail(tail)
         self.assertEqual(nval, -47.47)
-        self.assertEqual(ntail, b'')
+        self.assertExpectedTail(ntail)
 
     # ----------------
     def test_float_in_packed_type_py(self):
@@ -409,13 +432,15 @@ class TestETFDecode(unittest.TestCase):
         self._float_in_packed_type(native_impl)
 
     def _float_in_packed_type(self, codec):
-        example = bytes([py_impl.ETF_VERSION_TAG, py_impl.TAG_SMALL_TUPLE_EXT, 3,
-                         py_impl.TAG_NEW_FLOAT_EXT, 64, 9, 30, 184, 81, 235, 133, 31,
-                         py_impl.TAG_SMALL_INT, 13,
-                         py_impl.TAG_NEW_FLOAT_EXT, 64, 1, 194, 143, 92, 40, 245, 195])
+        example = self._etf_bytes([
+            py_impl.ETF_VERSION_TAG, py_impl.TAG_SMALL_TUPLE_EXT, 3,
+            py_impl.TAG_NEW_FLOAT_EXT, 64, 9, 30, 184, 81, 235, 133, 31,
+            py_impl.TAG_SMALL_INT, 13,
+            py_impl.TAG_NEW_FLOAT_EXT, 64, 1, 194, 143, 92, 40, 245, 195
+        ])
         val, tail = codec.binary_to_term(example, None)
         self.assertEqual(val, (3.14, 13, 2.22))
-        self.assertEqual(tail, b'')
+        self.assertExpectedTail(tail)
 
     # ----------------
 
@@ -426,14 +451,14 @@ class TestETFDecode(unittest.TestCase):
         self._decode_int(native_impl)
 
     def _decode_int(self, codec):
-        positive = bytes([131, 98, 0, 0, 18, 139])  # 4747
-        negative = bytes([131, 98, 255, 255, 237, 117])  # -4747
+        positive = self._etf_bytes([131, 98, 0, 0, 18, 139])  # 4747
+        negative = self._etf_bytes([131, 98, 255, 255, 237, 117])  # -4747
         (positive_val, positive_tail) = codec.binary_to_term(positive, None)
         (negative_val, negative_tail) = codec.binary_to_term(negative, None)
         self.assertEqual(positive_val, 4747)
-        self.assertEqual(positive_tail, b'')
+        self.assertExpectedTail(positive_tail)
         self.assertEqual(negative_val, -4747)
-        self.assertEqual(negative_tail, b'')
+        self.assertExpectedTail(negative_tail)
 
     # ----------------
 
@@ -444,14 +469,14 @@ class TestETFDecode(unittest.TestCase):
         self._decode_small_big(native_impl)
 
     def _decode_small_big(self, codec):
-        positive = bytes([131, 110, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1])  # 2 ** 64
-        negative = bytes([131, 110, 9, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1])  # - (2 ** 64)
+        positive = self._etf_bytes([131, 110, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1])  # 2 ** 64
+        negative = self._etf_bytes([131, 110, 9, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1])  # - (2 ** 64)
         (positive_val, positive_tail) = codec.binary_to_term(positive, None)
         (negative_val, negative_tail) = codec.binary_to_term(negative, None)
         self.assertEqual(positive_val, 2 ** 64)
-        self.assertEqual(positive_tail, b'')
+        self.assertExpectedTail(positive_tail)
         self.assertEqual(negative_val, -(2 ** 64))
-        self.assertEqual(negative_tail, b'')
+        self.assertExpectedTail(negative_tail)
 
     # ----------------
 
@@ -462,18 +487,20 @@ class TestETFDecode(unittest.TestCase):
         self._decode_small_big_random_bytes(native_impl)
 
     def _decode_small_big_random_bytes(self, codec):
-        positive = bytes([py_impl.ETF_VERSION_TAG, py_impl.TAG_SMALL_BIG_EXT, 13, 0,
-                          210, 10, 63, 78, 238, 224, 115, 195, 246, 15, 233, 142, 1
-                          ])
-        negative = bytes([py_impl.ETF_VERSION_TAG, py_impl.TAG_SMALL_BIG_EXT, 13, 1,
-                          210, 10, 63, 78, 238, 224, 115, 195, 246, 15, 233, 142, 1
-                          ])
+        positive = self._etf_bytes([
+            py_impl.ETF_VERSION_TAG, py_impl.TAG_SMALL_BIG_EXT, 13, 0,
+            210, 10, 63, 78, 238, 224, 115, 195, 246, 15, 233, 142, 1
+        ])
+        negative = self._etf_bytes([
+            py_impl.ETF_VERSION_TAG, py_impl.TAG_SMALL_BIG_EXT, 13, 1,
+            210, 10, 63, 78, 238, 224, 115, 195, 246, 15, 233, 142, 1
+        ])
         (positive_val, positive_tail) = codec.binary_to_term(positive, None)
         (negative_val, negative_tail) = codec.binary_to_term(negative, None)
         self.assertEqual(positive_val, 123456789012345678901234567890)
-        self.assertEqual(positive_tail, b'')
+        self.assertExpectedTail(positive_tail)
         self.assertEqual(negative_val, -123456789012345678901234567890)
-        self.assertEqual(negative_tail, b'')
+        self.assertExpectedTail(negative_tail)
 
     # ----------------
 
@@ -484,32 +511,36 @@ class TestETFDecode(unittest.TestCase):
         self._decode_large_big(native_impl)
 
     def _decode_large_big(self, codec):
-        positive = bytes([131, 111, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1])  # 2 ** 2040
-        negative = bytes([131, 111, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1])  # - (2 ** 2040)
+        positive = self._etf_bytes([  # 2 ** 2040
+            131, 111, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1
+        ])
+        negative = self._etf_bytes([  # - (2 ** 2040)
+            131, 111, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1
+        ])
         (positive_val, positive_tail) = codec.binary_to_term(positive, None)
         (negative_val, negative_tail) = codec.binary_to_term(negative, None)
         self.assertEqual(positive_val, 2 ** 2040)
-        self.assertEqual(positive_tail, b'')
+        self.assertExpectedTail(positive_tail)
         self.assertEqual(negative_val, -(2 ** 2040))
-        self.assertEqual(negative_tail, b'')
+        self.assertExpectedTail(negative_tail)
 
     # ----------------
 
@@ -523,10 +554,10 @@ class TestETFDecode(unittest.TestCase):
         """ Decode binary to term.Binary and to Python bytes and compare.
             Binary is <<34>>.
         """
-        data1 = bytes([131, 109, 0, 0, 0, 1, 34])
+        data1 = self._etf_bytes([131, 109, 0, 0, 0, 1, 34])
         (val1, tail1) = codec.binary_to_term(data1, None)
         self.assertEqual(val1, b'"')
-        self.assertEqual(tail1, b'')
+        self.assertExpectedTail(tail1)
 
     # ----------------
 
@@ -540,9 +571,10 @@ class TestETFDecode(unittest.TestCase):
         def negate_hook(x):
             return -x
 
-        positive = bytes([131, 98, 0, 0, 18, 139])  # 4747
+        positive = self._etf_bytes([131, 98, 0, 0, 18, 139])  # 4747
         (negative_val, tail) = codec.binary_to_term(positive, {'decode_hook': {'int': negate_hook}})
         self.assertEqual(negative_val, -4747)
+        self.assertExpectedTail(tail)
 
     # ----------------
 
@@ -553,15 +585,17 @@ class TestETFDecode(unittest.TestCase):
         self._decode_fun(native_impl)
 
     def _decode_fun(self, codec):
-        data = bytes([131, 112, 0, 0, 0, 72, 0, 37, 73, 174, 126, 251, 115,
-                      143, 183, 98, 224, 72, 249, 253, 111, 254, 159, 0, 0,
-                      0, 0, 0, 0, 0, 1, 100, 0, 5, 116, 101, 115, 116, 49,
-                      97, 0, 98, 1, 42, 77, 115, 103, 100, 0, 13, 110, 111,
-                      110, 111, 100, 101, 64, 110, 111, 104, 111, 115, 116,
-                      0, 0, 0, 58, 0, 0, 0, 0, 0, 97, 123])
+        data = self._etf_bytes([
+            131, 112, 0, 0, 0, 72, 0, 37, 73, 174, 126, 251, 115,
+            143, 183, 98, 224, 72, 249, 253, 111, 254, 159, 0, 0,
+            0, 0, 0, 0, 0, 1, 100, 0, 5, 116, 101, 115, 116, 49,
+            97, 0, 98, 1, 42, 77, 115, 103, 100, 0, 13, 110, 111,
+            110, 111, 100, 101, 64, 110, 111, 104, 111, 115, 116,
+            0, 0, 0, 58, 0, 0, 0, 0, 0, 97, 123
+        ])
         (val, tail) = codec.binary_to_term(data, None)
         self.assertTrue(isinstance(val, Fun))
-        self.assertEqual(tail, b'')
+        self.assertExpectedTail(tail)
 
     # ----------------
 
@@ -614,23 +648,26 @@ class TestETFDecode(unittest.TestCase):
 
     def _special(self, codec):
         """ Test decoding true, false, undefined=None """
-        data1 = bytes([py_impl.ETF_VERSION_TAG,
-                       py_impl.TAG_SMALL_ATOM_UTF8_EXT, 4]) + b'true'
+        data1 = self._etf_bytes(bytes([py_impl.ETF_VERSION_TAG,
+                                       py_impl.TAG_SMALL_ATOM_UTF8_EXT, 4]) +
+                                b'true')
         (val1, tail1) = codec.binary_to_term(data1, None)
         self.assertEqual(val1, True)
-        self.assertEqual(tail1, b'')
+        self.assertExpectedTail(tail1)
 
-        data2 = bytes([py_impl.ETF_VERSION_TAG,
-                       py_impl.TAG_SMALL_ATOM_UTF8_EXT, 5]) + b'false'
+        data2 = self._etf_bytes(bytes([py_impl.ETF_VERSION_TAG,
+                                       py_impl.TAG_SMALL_ATOM_UTF8_EXT, 5]) +
+                                b'false')
         (val2, tail2) = codec.binary_to_term(data2, None)
         self.assertEqual(val2, False)
-        self.assertEqual(tail2, b'')
+        self.assertExpectedTail(tail2)
 
-        data3 = bytes([py_impl.ETF_VERSION_TAG,
-                       py_impl.TAG_SMALL_ATOM_UTF8_EXT, 9]) + b'undefined'
+        data3 = self._etf_bytes(bytes([py_impl.ETF_VERSION_TAG,
+                                       py_impl.TAG_SMALL_ATOM_UTF8_EXT, 9]) +
+                                b'undefined')
         (val3, tail3) = codec.binary_to_term(data3, None)
         self.assertEqual(val3, None)
-        self.assertEqual(tail3, b'')
+        self.assertExpectedTail(tail3)
 
 
 if __name__ == '__main__':
