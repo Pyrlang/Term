@@ -41,6 +41,15 @@ pip install setuptools-rust semantic_version
 pip install pyrlang-term
 ```
 
+Testing
+---
+
+To run the tests:
+
+```
+python -m unittest discover test
+```
+
 
 Atoms
 ---
