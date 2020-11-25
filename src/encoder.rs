@@ -82,6 +82,7 @@ impl<'a> Encoder<'a> {
       },
       "float" => {
         let val: f64 = FromPyObject::extract(self.py, term)?;
+        if !val.is_finite() { return Err(CodecError::NonFiniteFloat { f: val }) }
         return self.write_float(val)
       },
       "list" => {

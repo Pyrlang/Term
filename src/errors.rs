@@ -44,6 +44,8 @@ pub enum CodecError {
   IntegerEncodingRange { i: i64 },
   #[fail(display="Atom text is too long (65535 bytes limit reached)")]
   AtomTooLong,
+  #[fail(display="Float value {} is not finite", f)]
+  NonFiniteFloat { f: f64 },
 }
 
 pub type CodecResult<T> = Result<T, CodecError>;
