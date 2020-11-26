@@ -46,6 +46,8 @@ pub enum CodecError {
   AtomTooLong,
   #[fail(display="Float value {} is not finite", f)]
   NonFiniteFloat { f: f64 },
+  #[fail(display="IOError: {}", txt)]
+  IOError { txt: String }
 }
 
 pub type CodecResult<T> = Result<T, CodecError>;
