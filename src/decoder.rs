@@ -487,7 +487,7 @@ impl <'a> Decoder<'a> {
     let offset = &mut 0usize;
     let arity = in_bytes.read_with::<u32>(offset, byte::BE)? as usize;
 
-    let mut result = PyDict::new(self.py);
+    let result = PyDict::new(self.py);
 
     // Read key/value pairs two at a time
     let mut tail = &in_bytes[*offset..];
@@ -495,7 +495,7 @@ impl <'a> Decoder<'a> {
       let (py_key, tail1) = self.decode(tail)?;
       let (py_val, tail2) = self.decode(tail1)?;
       tail = tail2;
-      result.set_item(self.py, py_key, py_val);
+      result.set_item(self.py, py_key, py_val).unwrap();
     }
 
     Ok((result.into_object(), tail))
@@ -626,7 +626,7 @@ impl <'a> Decoder<'a> {
   fn parse_fun<'inp>(&mut self, in_bytes: &'inp [u8]) -> CodecResult<(PyObject, &'inp [u8])>
   {
     let offset = &mut 0usize;
-    let size = in_bytes.read_with::<u32>(offset, byte::BE)?;
+    let _size = in_bytes.read_with::<u32>(offset, byte::BE)?;
     let arity = in_bytes.read_with::<u8>(offset, byte::BE)? as usize;
 
     let uniq_md5 = &in_bytes[*offset..*offset+16];
