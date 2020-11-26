@@ -60,6 +60,12 @@ impl std::convert::From<PyErr> for CodecError {
 }
 
 
+impl std::convert::From<std::io::Error> for CodecError {
+  fn from(err: std::io::Error) -> CodecError {
+    CodecError::IOError { txt: format!("{:?}", err) }
+  }
+}
+
 impl std::convert::From<byte::Error> for CodecError {
   fn from(err: byte::Error) -> CodecError {
     CodecError::ReadError { txt: format!("{:?}", err) }
