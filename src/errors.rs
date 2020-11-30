@@ -46,6 +46,8 @@ pub enum CodecError {
   AtomTooLong,
   #[fail(display="Float value {} is not finite", f)]
   NonFiniteFloat { f: f64 },
+  #[fail(display="IOError: {}", txt)]
+  IOError { txt: String }
 }
 
 pub type CodecResult<T> = Result<T, CodecError>;
@@ -57,6 +59,12 @@ impl std::convert::From<PyErr> for CodecError {
   }
 }
 
+
+impl std::convert::From<std::io::Error> for CodecError {
+  fn from(err: std::io::Error) -> CodecError {
+    CodecError::IOError { txt: format!("{:?}", err) }
+  }
+}
 
 impl std::convert::From<byte::Error> for CodecError {
   fn from(err: byte::Error) -> CodecError {

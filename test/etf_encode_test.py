@@ -506,8 +506,25 @@ class TestETFEncode(unittest.TestCase):
         self._fail_encode_nonfinite(native_impl)
 
     def _fail_encode_nonfinite(self, codec):
+        # Check that nonfinites raise exception, even when within a list, tuple
+        # or dict
         nonfinites = [float(n) for n in "inf -inf nan".split()]
+        for n in nonfinites:
+            with self.assertRaises(Exception):
+                codec.term_to_binary(n)
 
+    # ----------------
+
+    def test_fail_encode_nested_nonfinite_float_py(self):
+        self._fail_encode_nested_nonfinite(py_impl)
+
+    def test_fail_encode_nested_nonfinite_float_native(self):
+        self._fail_encode_nested_nonfinite(native_impl)
+
+    def _fail_encode_nested_nonfinite(self, codec):
+        # Check that nonfinites raise exception, even when within a list, tuple
+        # or dict
+        nonfinites = [{1: float("inf")}, [2, float("-inf")], (3, float("nan"))]
         for n in nonfinites:
             with self.assertRaises(Exception):
                 codec.term_to_binary(n)

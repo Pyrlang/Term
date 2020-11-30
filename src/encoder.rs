@@ -16,7 +16,6 @@ use byteorder::{WriteBytesExt, BigEndian};
 use cpython::*;
 use std::{i32, u8, u16};
 use std::io::{Write};
-
 use super::consts;
 use super::errors::*;
 use std::borrow::Cow;
@@ -82,24 +81,22 @@ impl<'a> Encoder<'a> {
       },
       "float" => {
         let val: f64 = FromPyObject::extract(self.py, term)?;
-        if !val.is_finite() { return Err(CodecError::NonFiniteFloat { f: val }) }
+        if !val.is_finite() { return Err(CodecError::NonFiniteFloat { f: val })}
         return self.write_float(val)
       },
       "list" => {
         let as_list = PyList::extract(self.py, &term)?;
-        self.write_list_no_tail(&as_list);
+        self.write_list_no_tail(&as_list)?;
         self.data.push(consts::TAG_NIL_EXT);
         return Ok(())
       },
       "tuple" => {
         let as_tup = PyTuple::extract(self.py, &term)?;
-        self.write_tuple(&as_tup);
-        return Ok(())
+        return self.write_tuple(&as_tup);
       },
       "dict" => {
         let as_dict = PyDict::extract(self.py, &term)?;
-        self.write_dict(&as_dict);
-        return Ok(())
+        return self.write_dict(&as_dict);
       },
       "Atom" => return self.write_atom(&term),
       "StrictAtom" => return self.write_atom(&term),
@@ -118,7 +115,7 @@ impl<'a> Encoder<'a> {
         let elements0 = term.getattr(self.py, "elements_")?;
         let elements = PyList::extract(self.py, &elements0)?;
         let tail = term.getattr(self.py, "tail_")?;
-        self.write_list_no_tail(&elements);
+        self.write_list_no_tail(&elements)?;
         return self.encode(&tail)
       },
       "Pid" => return self.write_pid(&term),
@@ -129,7 +126,7 @@ impl<'a> Encoder<'a> {
       },
       "BitString" => return self.write_bitstring(&term),
       //"Fun" => return self.write_fun(&term),
-      other => return self.write_unknown_object(type_name_ref, &term)
+      _other => return self.write_unknown_object(type_name_ref, &term)
     };
   }
 
@@ -138,7 +135,7 @@ impl<'a> Encoder<'a> {
   /// If no catch_all was set, check whether object has ``__etf__(self)`` member.
   /// Else encode object as Tuple(b'ClassName', Dict(b'field', values)) trying
   ///   to avoid circular loops.
-  fn write_unknown_object(&mut self, name: &str, py_term: &PyObject) -> CodecResult<()> {
+  fn write_unknown_object(&mut self, _name: &str, py_term: &PyObject) -> CodecResult<()> {
     match &self.catch_all {
       Some(ref h1) => {
         let repr1 = h1.call(self.py, (py_term, ), None)?;
@@ -177,11 +174,10 @@ impl<'a> Encoder<'a> {
   fn write_list_no_tail(&mut self, list: &PyList) -> CodecResult<()> {
     let size = list.len(self.py);
     self.data.push(consts::TAG_LIST_EXT);
-    self.data.write_u32::<BigEndian>(size as u32);
-
+    self.data.write_u32::<BigEndian>(size as u32).map_err(|e| CodecError::from(e))?;
     for i in 0..size {
       let item = list.get_item(self.py, i);
-      self.encode(&item);
+      self.encode(&item)?;
     }
     Ok(())
   }
@@ -195,12 +191,12 @@ impl<'a> Encoder<'a> {
       self.data.push(size as u8);
     } else {
       self.data.push(consts::TAG_LARGE_TUPLE_EXT);
-      self.data.write_u32::<BigEndian>(size as u32);
+      self.data.write_u32::<BigEndian>(size as u32).map_err(|e| CodecError::from(e))?;
     }
 
     for i in 0..size {
       let item = tup.get_item(self.py, i);
-      self.encode(&item);
+      self.encode(&item)?;
     }
     Ok(())
   }
@@ -211,11 +207,11 @@ impl<'a> Encoder<'a> {
   fn write_dict(&mut self, py_dict: &PyDict) -> CodecResult<()> {
     let size = py_dict.len(self.py);
     self.data.push(consts::TAG_MAP_EXT);
-    self.data.write_u32::<BigEndian>(size as u32);
+    self.data.write_u32::<BigEndian>(size as u32).map_err(|e| CodecError::from(e))?;
 
     for (py_key, py_value) in py_dict.items(self.py) {
-      self.encode(&py_key);
-      self.encode(&py_value);
+      self.encode(&py_key)?;
+      self.encode(&py_value)?;
     }
     Ok(())
   }
@@ -239,7 +235,7 @@ impl<'a> Encoder<'a> {
       self.data.push(size as u8);
     } else {
       self.data.push(consts::TAG_LARGE_BIG_EXT);
-      self.data.write_u32::<BigEndian>(size);
+      self.data.write_u32::<BigEndian>(size).map_err(|e| CodecError::from(e))?;
     }
 
     let ltz: bool = val.call_method(self.py, "__lt__", (0, ), None)?.extract(self.py)?;
@@ -250,12 +246,12 @@ impl<'a> Encoder<'a> {
       let r: PyObject = val.call_method(self.py, "__mul__", (-1, ), None)?.extract(self.py)?;
       let b: PyBytes = r.call_method(self.py, "to_bytes", (size, "little"), None)?.extract(self.py)?;
       let data: &[u8] = b.data(self.py);
-      self.data.write(data);
+      self.data.write(data).map_err(|e| CodecError::from(e))?;
     } else {
       self.data.push( 0 as u8);
       let b: PyBytes = val.call_method(self.py, "to_bytes", (size, "little"), None)?.extract(self.py)?;
       let data: &[u8] = b.data(self.py);
-      self.data.write(data);
+      self.data.write(data).map_err(|e| CodecError::from(e))?;
     }
     Ok(())
   }
@@ -268,9 +264,10 @@ impl<'a> Encoder<'a> {
     } else if val >= i32::MIN as i64
         && val <= i32::MAX as i64 {
       self.data.push(consts::TAG_INT);
-      self.data.write_i32::<BigEndian>(val as i32);
+      self.data.write_i32::<BigEndian>(val as i32).map_err(|e| CodecError::from(e))?;
     } else {
       return Err(CodecError::IntegerEncodingRange {i: val})
+
     }
 
     Ok(())
@@ -280,7 +277,7 @@ impl<'a> Encoder<'a> {
   #[inline]
   fn write_float(&mut self, val: f64) -> CodecResult<()> {
     self.data.push(consts::TAG_NEW_FLOAT_EXT);
-    self.data.write_f64::<BigEndian>(val);
+    self.data.write_f64::<BigEndian>(val).map_err(|e| CodecError::from(e))?;
     Ok(())
   }
 
@@ -302,11 +299,11 @@ impl<'a> Encoder<'a> {
     if str_byte_length <= u8::MAX as usize {
       self.data.push(consts::TAG_SMALL_ATOM_UTF8_EXT);
       self.data.push(str_byte_length as u8); // 8bit length
-      self.data.write(byte_array); // write &[u8] string content
+      self.data.write(byte_array).map_err(|e| CodecError::from(e))?; // write &[u8] string content
     } else if str_byte_length <= u16::MAX as usize {
       self.data.push(consts::TAG_ATOM_UTF8_EXT);
-      self.data.write_u16::<BigEndian>(str_byte_length as u16); // 16bit length
-      self.data.write(byte_array); // write &[u8] string content
+      self.data.write_u16::<BigEndian>(str_byte_length as u16).map_err(|e| CodecError::from(e))?; // 16bit length
+      self.data.write(byte_array).map_err(|e| CodecError::from(e))?; // write &[u8] string content
     } else {
       return Err(CodecError::AtomTooLong)
     }
@@ -326,13 +323,13 @@ impl<'a> Encoder<'a> {
     if str_byte_length <= u8::MAX as usize && can_be_encoded_as_bytes {
       // Create an optimised byte-array structure and push bytes
       self.data.push(consts::TAG_STRING_EXT);
-      self.data.write_u16::<BigEndian>(str_byte_length as u16); // 16bit length
-      self.data.write(byte_array); // write &[u8] string content
+      self.data.write_u16::<BigEndian>(str_byte_length as u16).map_err(|e| CodecError::from(e))?; // 16bit length
+      self.data.write(byte_array).map_err(|e| CodecError::from(e))?; // write &[u8] string content
     } else {
       // Create a list structure and push each codepoint as an integer
       self.data.push(consts::TAG_LIST_EXT);
       let chars_count = text.chars().count();
-      self.data.write_u32::<BigEndian>(chars_count as u32); // chars, not bytes!
+      self.data.write_u32::<BigEndian>(chars_count as u32).map_err(|e| CodecError::from(e))?; // chars, not bytes!
       for (_i, ch) in text.char_indices() {
         self.write_4byte_int(ch as i64)?
       }
@@ -360,10 +357,10 @@ impl<'a> Encoder<'a> {
     let creation: u32 = FromPyObject::extract(self.py, &py_creation)?;
 
     self.data.push(consts::TAG_NEW_PID_EXT);
-    self.write_atom_from_cow(node_name.to_string(self.py)?);
-    self.data.write_u32::<BigEndian>(id);
-    self.data.write_u32::<BigEndian>(serial);
-    self.data.write_u32::<BigEndian>(creation);
+    self.write_atom_from_cow(node_name.to_string(self.py)?).map_err(|e| CodecError::from(e))?;
+    self.data.write_u32::<BigEndian>(id).map_err(|e| CodecError::from(e))?;
+    self.data.write_u32::<BigEndian>(serial).map_err(|e| CodecError::from(e))?;
+    self.data.write_u32::<BigEndian>(creation).map_err(|e| CodecError::from(e))?;
 
     Ok(())
   }
@@ -385,10 +382,10 @@ impl<'a> Encoder<'a> {
     let creation: u32 = FromPyObject::extract(self.py, &py_creation)?;
 
     self.data.push(consts::TAG_NEWER_REF_EXT);
-    self.data.write_u16::<BigEndian>((id.len() / 4) as u16);
-    self.write_atom_from_cow(node_name.to_string(self.py)?);
-    self.data.write_u32::<BigEndian>(creation);
-    self.data.write(id);
+    self.data.write_u16::<BigEndian>((id.len() / 4) as u16).map_err(|e| CodecError::from(e))?;
+    self.write_atom_from_cow(node_name.to_string(self.py)?).map_err(|e| CodecError::from(e))?;
+    self.data.write_u32::<BigEndian>(creation).map_err(|e| CodecError::from(e))?;
+    self.data.write(id).map_err(|e| CodecError::from(e))?;
 
     Ok(())
   }
@@ -399,8 +396,8 @@ impl<'a> Encoder<'a> {
   fn write_binary(&mut self, py_bytes: &PyBytes) -> CodecResult<()> {
     let data: &[u8] = py_bytes.data(self.py);
     self.data.push(consts::TAG_BINARY_EXT);
-    self.data.write_u32::<BigEndian>(data.len() as u32);
-    self.data.write(data);
+    self.data.write_u32::<BigEndian>(data.len() as u32).map_err(|e| CodecError::from(e))?;
+    self.data.write(data).map_err(|e| CodecError::from(e))?;
     Ok(())
   }
 
@@ -417,10 +414,9 @@ impl<'a> Encoder<'a> {
     let last_byte_bits: u8 = FromPyObject::extract(self.py, &py_lbb)?;
 
     self.data.push(consts::TAG_BIT_BINARY_EXT);
-    self.data.write_u32::<BigEndian>(data.len() as u32);
+    self.data.write_u32::<BigEndian>(data.len() as u32).map_err(|e| CodecError::from(e))?;
     self.data.push(last_byte_bits);
-    self.data.write(data);
-
+    self.data.write(data).map_err(|e| CodecError::from(e))?;
     Ok(())
   }
 
