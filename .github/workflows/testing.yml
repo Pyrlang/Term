@@ -36,6 +36,9 @@ jobs:
     - name: Build rust native module
       run: |
         python setup.py build
+    - name: Install dev link for package
+      run: |
+        pip install -e .
     - name: Test with pytest
       run: |
         pytest
