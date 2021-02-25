@@ -20,9 +20,10 @@ try:
           packages=[MODULENAME],
           # rust extensions are not zip safe, just like C-extensions.
           zip_safe=False)
-except:
+except Exception as e:
     print("----------------------------")
-    print("Rust Setuptools not found, continue with Python slow implementation only")
+    print("Rust build failed, continue with Python slow implementation only")
+    print("error was:", e)
     print("----------------------------")
 
     setup(name=PKGNAME,
