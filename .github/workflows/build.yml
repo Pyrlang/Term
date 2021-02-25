@@ -15,7 +15,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-10.15]
 
     # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
@@ -31,6 +31,6 @@ jobs:
           CIBW_TEST_COMMAND: pytest
           
       - name: Upload artifacts
-        uses: actions/upoad-artifact@v2
+        uses: actions/upload-artifact@v2
         with:
           path: ./wheelhouse/*.whl
