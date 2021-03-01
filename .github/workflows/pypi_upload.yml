@@ -3,9 +3,9 @@ name: Upload to Pypi
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: 'Version upload to pypi'
-        required: true
+      # version:
+        # description: 'Version upload to pypi'
+        # required: true
       pypi_repo:
         description: 'Repo to upload to (testpypi or pypi)'
         default: 'testpypi'
@@ -24,3 +24,9 @@ jobs:
           workflow: build.yml
       - name: show all data we've got to work with
         run: ls -R
+      - name: Publish package to Pypi
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          user: __token__
+          password: ${{ secrets.PYPI_TEST_TOKEN }}
+          package-dir: artifact/
