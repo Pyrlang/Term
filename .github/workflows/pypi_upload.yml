@@ -24,7 +24,16 @@ jobs:
           workflow: build.yml
       - name: show all data we've got to work with
         run: ls -R
+      - name: Publish package to Test Pypi
+        if: ${{ github.event.inputs.pypi_repo == 'testpypi' }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          user: __token__
+          password: ${{ secrets.PYPI_TEST_TOKEN }}
+          packages_dir: artifact/
+          repository_url: https://test.pypi.org/legacy/
       - name: Publish package to Pypi
+        if: ${{ github.event.inputs.pypi_repo == 'pypi' }}
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           user: __token__
