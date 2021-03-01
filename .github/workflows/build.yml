@@ -3,7 +3,7 @@ name: Build
 on:
   release:
     types:
-      - pusblished
+      - published
       - created
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
@@ -40,7 +40,7 @@ jobs:
         uses: actions/upload-artifact@v2
         with:
           path: ./wheelhouse/*.whl
-          
+
   build_sdist:
     name: Build source distribution
     runs-on: ubuntu-latest
