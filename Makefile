@@ -20,7 +20,7 @@ clearterminal:
 
 .PHONY: test
 test: clearterminal
-	for f in $(shell ls test/*_test.py); do \
+	for f in $(shell ls test/test_*.py); do \
 		echo "RUNNING $$f"; \
 		$(PY) $$f || exit 1; \
 	done
