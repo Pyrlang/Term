@@ -29,6 +29,9 @@ class ImproperList:
         self.elements_ = elements
         self.tail_ = tail
 
+    def __eq__(self, other):
+        return self.elements_ == other.elements_ and self.tail_ == other.tail_
+
 
 def list_to_unicode_str(lst: list) -> str:
     """ A helper function to convert a list of large integers incoming from

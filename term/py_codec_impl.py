@@ -285,7 +285,8 @@ def binary_to_term_2(data: bytes, options: dict = None) -> (any, bytes):
         list_tail, tail = binary_to_term_2(tail)
         if list_tail == NIL:
             return result_l, tail
-        return (result_l, list_tail), tail
+
+        return ImproperList(result_l, list_tail), tail
 
     if tag == TAG_SMALL_TUPLE_EXT:
         if len(data) < 2:
