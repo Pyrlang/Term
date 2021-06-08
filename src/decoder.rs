@@ -43,6 +43,7 @@ pub struct Decoder<'a> {
   cached_pid_pyclass: Option<PyObject>,
   cached_ref_pyclass: Option<PyObject>,
   cached_fun_pyclass: Option<PyObject>,
+  cached_improper_list_pyclass: Option<PyObject>,
 }
 
 
@@ -73,6 +74,7 @@ impl <'a> Decoder<'a> {
       cached_pid_pyclass: None,
       cached_ref_pyclass: None,
       cached_fun_pyclass: None,
+      cached_improper_list_pyclass: None,
 //      cached_bitstr_pyclass: None,
     })
   }
@@ -263,6 +265,18 @@ impl <'a> Decoder<'a> {
         let fun_cls = fun_m.get(self.py, "Fun").unwrap();
         self.cached_fun_pyclass = Some(fun_cls.clone_ref(self.py));
         fun_cls
+      },
+    }
+  }
+
+  fn get_improper_list_pyclass(&mut self) -> PyObject {
+    match &self.cached_improper_list_pyclass {
+      Some(ref l) => l.clone_ref(self.py),
+      None => {
+        let list_m = self.py.import("term.list").unwrap();
+        let improper_list_cls = list_m.get(self.py, "ImproperList").unwrap();
+        self.cached_improper_list_pyclass = Some(improper_list_cls.clone_ref(self.py));
+        improper_list_cls
       },
     }
   }
@@ -473,8 +487,9 @@ impl <'a> Decoder<'a> {
     } else {
       // We are looking at an improper list
       let (tail_val, tail_bytes) = self.decode(tail)?;
-      let py_pair = PyTuple::new(self.py, &[py_lst.into_object(), tail_val]);
-      Ok((py_pair.into_object(), tail_bytes))
+      let improper_list_cls = self.get_improper_list_pyclass();
+      let improper_list = improper_list_cls.call(self.py, (py_lst, tail_val), None)?;
+      Ok((improper_list.into_object(), tail_bytes))
     }
   }
 

@@ -7,7 +7,7 @@ from term.atom import Atom, StrictAtom
 from term.pid import Pid
 from term.reference import Reference
 from term.fun import Fun
-from term.list import list_to_unicode_str
+from term.list import ImproperList, list_to_unicode_str
 
 
 class TestETFDecode(unittest.TestCase):
@@ -374,7 +374,27 @@ class TestETFDecode(unittest.TestCase):
         self.assertEqual(val2, [1, Atom("ok")])
         self.assertExpectedTail(tail2)
 
-    # ----------------
+# ----------------
+
+    def test_decode_improper_list_py(self):
+        self._decode_improper_list(py_impl)
+
+    def test_decode_improper_list_native(self):
+        self._decode_improper_list(native_impl)
+
+    def _decode_improper_list(self, codec):
+        # Test data is [1 | ok]
+        data3 = self._etf_bytes([131, py_impl.TAG_LIST_EXT,
+                                 0, 0, 0, 1,
+                                 py_impl.TAG_SMALL_INT, 1,
+                                 py_impl.TAG_ATOM_EXT, 0, 2, 111, 107])
+        (val3, tail3) = codec.binary_to_term(data3, None)
+        self.assertTrue(isinstance(val3, ImproperList),
+                        "Expected list, got: %s (%s)"
+                        % (val3.__class__.__name__, val3))
+        self.assertEqual(val3, ImproperList([1], Atom("ok")))
+        self.assertExpectedTail(tail3)
+# ----------------
 
     def test_decode_map_py(self):
         self._decode_map(py_impl)
