@@ -112,9 +112,9 @@ impl<'a> Encoder<'a> {
       },
       "NoneType" => return self.write_atom_from_cow(Cow::from("undefined")),
       "ImproperList" => {
-        let elements0 = term.getattr(self.py, "elements_")?;
+        let elements0 = term.getattr(self.py, "_elements")?;
         let elements = PyList::extract(self.py, &elements0)?;
-        let tail = term.getattr(self.py, "tail_")?;
+        let tail = term.getattr(self.py, "_tail")?;
         self.write_list_no_tail(&elements)?;
         return self.encode(&tail)
       },

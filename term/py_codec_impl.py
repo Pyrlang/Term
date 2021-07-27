@@ -15,7 +15,6 @@
 """ Module implements encoder and decoder from ETF (Erlang External Term Format)
     used by the network distribution layer.
 """
-
 import math
 import struct
 from typing import Callable, Union
@@ -150,7 +149,7 @@ def _get_create_atom_fn(opt: str, callable: object) -> Callable:
 
     def _create_atom_strict_atom(name: bytes, encoding: str) -> Atom:
         return StrictAtom(name.decode(encoding))
-    
+
     def _create_atom_custom(name: bytes, encoding: str) -> object:
         return callable(name.decode(encoding))
 
@@ -208,10 +207,10 @@ def binary_to_term_2(data: bytes, options: dict = None) -> (any, bytes):
         object and bitstrings into a pair of ``(bytes, last_byte_bits:int)``.
 
         :param options: dict(str, _);
-                * "atom": "str" | "bytes" | "Atom" | "StrictAtom"; default 
+                * "atom": "str" | "bytes" | "Atom" | "StrictAtom"; default
                 "Atom".
                   Returns atoms as strings, as bytes or as atom.Atom class objects
-                * "atom_call": callable object that will get str as input the 
+                * "atom_call": callable object that will get str as input the
                   returned value will be used as atom representation
                * "byte_string": "str" | "bytes" | "int_list" (default "str").
                  Returns 8-bit strings as Python str or bytes or int list.
@@ -225,7 +224,7 @@ def binary_to_term_2(data: bytes, options: dict = None) -> (any, bytes):
     if options is None:
         options = {}
 
-    create_atom_fn = _get_create_atom_fn(options.get("atom", "Atom"), 
+    create_atom_fn = _get_create_atom_fn(options.get("atom", "Atom"),
                                          options.get("atom_call"))
     create_str_fn = _get_create_str_fn(options.get("byte_string", "str"))
 
@@ -285,7 +284,7 @@ def binary_to_term_2(data: bytes, options: dict = None) -> (any, bytes):
         list_tail, tail = binary_to_term_2(tail)
         if list_tail == NIL:
             return result_l, tail
-        return (result_l, list_tail), tail
+        return ImproperList(result_l, list_tail), tail
 
     if tag == TAG_SMALL_TUPLE_EXT:
         if len(data) < 2:
@@ -687,7 +686,7 @@ def term_to_binary_2(val, encode_hook: [Callable, None]) -> bytes:
         return _pack_atom(val)
 
     elif isinstance(val, ImproperList):
-        return _pack_list(val.elements_, val.tail_, encode_hook)
+        return _pack_list(val._elements, val._tail, encode_hook)
 
     elif isinstance(val, Pid):
         return _pack_pid(val)

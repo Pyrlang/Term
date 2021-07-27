@@ -19,16 +19,28 @@ import array
 NIL = []  # type: List
 
 
-class ImproperList:
+class ImproperList(List):
     """ A simple data holder used to pass improper lists back to Erlang.
         An Erlang improper list looks like `[1, 2, 3 | 4]` where 4 takes
         tail slot of last list cell instead of `NIL`. This is a rare data type
         and very likely you will not ever need it.
     """
-    def __init__(self, elements: list, tail):
-        self.elements_ = elements
-        self.tail_ = tail
+    def __init__(self, elements: list, tail=None):
+        """ tail is optional, if omitted, the last element in elements
+            `elements[-1]` will be considered to be the tail. if it's
+            present it will be appended to the list so it becomes `self[-1]`
+        """
+        super().__init__(elements)
+        if tail:
+            self.append(tail)
 
+    @property
+    def _elements(self):
+        return self[:-1]
+
+    @property
+    def _tail(self):
+        return self[-1]
 
 def list_to_unicode_str(lst: list) -> str:
     """ A helper function to convert a list of large integers incoming from
