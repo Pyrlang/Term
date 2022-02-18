@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(unused_braces)]
+// For cpython macros
+#![allow(unused_braces, clippy::manual_strip)]
+
 #[macro_use]
 extern crate failure;
-//#[macro_use]
-//#[macro_use] extern crate lazy_static;
 extern crate byte;
 extern crate byteorder;
 extern crate compress;

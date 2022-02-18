@@ -55,7 +55,7 @@ pub enum ByteStringRepresentation {
 
 /// Option: "atom" => "bytes" | "str" | "Atom" | "StrictAtom" (as Atom class, default)
 pub fn get_atom_opt(py: Python, opts1: &PyDict) -> CodecResult<AtomRepresentation> {
-    let opt_s = get_str_opt(py, &opts1, "atom", "Atom")?;
+    let opt_s = get_str_opt(py, opts1, "atom", "Atom")?;
     match opt_s.as_ref() {
         "bytes" => Ok(AtomRepresentation::Bytes),
         "str" => Ok(AtomRepresentation::Str),
@@ -73,7 +73,7 @@ pub fn get_atom_opt(py: Python, opts1: &PyDict) -> CodecResult<AtomRepresentatio
 
 /// Option: "byte_string" => "bytes" | "str" | "int_list" (default: str)
 pub fn get_byte_str_opt(py: Python, opts1: &PyDict) -> CodecResult<ByteStringRepresentation> {
-    let opt_s: String = get_str_opt(py, &opts1, "byte_string", "str")?;
+    let opt_s: String = get_str_opt(py, opts1, "byte_string", "str")?;
     match opt_s.as_ref() {
         "bytes" => Ok(ByteStringRepresentation::Bytes),
         "str" => Ok(ByteStringRepresentation::Str),

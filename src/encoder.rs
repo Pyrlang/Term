@@ -37,7 +37,7 @@ impl<'a> Encoder<'a> {
             PyDict::extract(py, &opt)?
         };
         let encode_hook = match py_opts.get_item(py, "encode_hook") {
-            Some(ref h1) => PyDict::extract(py, &h1)?,
+            Some(ref h1) => PyDict::extract(py, h1)?,
             None => PyDict::new(py),
         };
         let catch_all = encode_hook.get_item(py, "catch_all");
@@ -45,8 +45,8 @@ impl<'a> Encoder<'a> {
         Ok(Encoder {
             py,
             data: Vec::with_capacity(32),
-            encode_hook: encode_hook,
-            catch_all: catch_all,
+            encode_hook,
+            catch_all,
             cached_generic_serialize_fn: None,
         })
     }
@@ -57,9 +57,9 @@ impl<'a> Encoder<'a> {
         match &self.encode_hook.get_item(self.py, type_name_ref) {
             Some(ref h1) => {
                 let repr1 = h1.call(self.py, (py_term,), None)?;
-                return self.encode_default(&repr1);
+                self.encode_default(&repr1)
             }
-            None => return self.encode_default(py_term),
+            None => self.encode_default(py_term),
         }
     }
 
@@ -68,60 +68,60 @@ impl<'a> Encoder<'a> {
         let type_name_ref: &str = type_name.as_ref();
 
         match type_name_ref {
-            "int" => return self.write_int(&term),
+            "int" => self.write_int(term),
             "float" => {
                 let val: f64 = FromPyObject::extract(self.py, term)?;
                 if !val.is_finite() {
                     return Err(CodecError::NonFiniteFloat { f: val });
                 }
-                return self.write_float(val);
+                self.write_float(val)
             }
             "list" => {
-                let as_list = PyList::extract(self.py, &term)?;
+                let as_list = PyList::extract(self.py, term)?;
                 self.write_list_no_tail(&as_list)?;
                 self.data.push(consts::TAG_NIL_EXT);
-                return Ok(());
+                Ok(())
             }
             "tuple" => {
-                let as_tup = PyTuple::extract(self.py, &term)?;
-                return self.write_tuple(&as_tup);
+                let as_tup = PyTuple::extract(self.py, term)?;
+                self.write_tuple(&as_tup)
             }
             "dict" => {
-                let as_dict = PyDict::extract(self.py, &term)?;
-                return self.write_dict(&as_dict);
+                let as_dict = PyDict::extract(self.py, term)?;
+                self.write_dict(&as_dict)
             }
-            "Atom" => return self.write_atom(&term),
-            "StrictAtom" => return self.write_atom(&term),
+            "Atom" => self.write_atom(term),
+            "StrictAtom" => self.write_atom(term),
             "str" => {
-                let as_str = PyString::extract(self.py, &term)?;
-                return self.write_str(&as_str);
+                let as_str = PyString::extract(self.py, term)?;
+                self.write_str(&as_str)
             }
             "bool" => {
-                let val: bool = FromPyObject::extract(self.py, &term)?;
-                return self.write_atom_from_cow(if val {
+                let val: bool = FromPyObject::extract(self.py, term)?;
+                self.write_atom_from_cow(if val {
                     Cow::from("true")
                 } else {
                     Cow::from("false")
-                });
+                })
             }
-            "NoneType" => return self.write_atom_from_cow(Cow::from("undefined")),
+            "NoneType" => self.write_atom_from_cow(Cow::from("undefined")),
             "ImproperList" => {
                 let elements0 = term.getattr(self.py, "_elements")?;
                 let elements = PyList::extract(self.py, &elements0)?;
                 let tail = term.getattr(self.py, "_tail")?;
                 self.write_list_no_tail(&elements)?;
-                return self.encode(&tail);
+                self.encode(&tail)
             }
-            "Pid" => return self.write_pid(&term),
-            "Reference" => return self.write_ref(&term),
+            "Pid" => self.write_pid(term),
+            "Reference" => self.write_ref(term),
             "bytes" => {
-                let py_bytes = PyBytes::extract(self.py, &term)?;
-                return self.write_binary(&py_bytes);
+                let py_bytes = PyBytes::extract(self.py, term)?;
+                self.write_binary(&py_bytes)
             }
-            "BitString" => return self.write_bitstring(&term),
+            "BitString" => self.write_bitstring(term),
             //"Fun" => return self.write_fun(&term),
-            _other => return self.write_unknown_object(type_name_ref, &term),
-        };
+            _other => self.write_unknown_object(type_name_ref, term),
+        }
     }
 
     /// For unknown object, check whether catch_all is set, encode what it returns.
@@ -132,14 +132,14 @@ impl<'a> Encoder<'a> {
         match &self.catch_all {
             Some(ref h1) => {
                 let repr1 = h1.call(self.py, (py_term,), None)?;
-                return self.encode(&repr1);
+                self.encode(&repr1)
             }
             None => match py_term.getattr(self.py, "__etf__") {
                 Ok(h2) => {
                     let repr2 = h2.call(self.py, NoArgs, None)?;
-                    return self.encode(&repr2);
+                    self.encode(&repr2)
                 }
-                Err(_) => return self.write_generic_unknown_object(&py_term),
+                Err(_) => self.write_generic_unknown_object(py_term),
             },
         }
     }
@@ -157,7 +157,7 @@ impl<'a> Encoder<'a> {
         let result_pair = py_fn.call(self.py, (py_term, self.py.None()), None)?;
         let py_pair: PyTuple = PyTuple::extract(self.py, &result_pair)?;
         let result = py_pair.get_item(self.py, 0);
-        return self.encode(&result);
+        self.encode(&result)
     }
 
     /// Writes list tag with elements, but no tail element (NIL or other). Ensure
@@ -233,7 +233,7 @@ impl<'a> Encoder<'a> {
             .call_method(self.py, "__lt__", (0,), None)?
             .extract(self.py)?;
         if ltz {
-            self.data.push(1 as u8); // we have a negative value
+            self.data.push(1_u8); // we have a negative value
                                      // we make new object that we multiply with -1 to switch sign, so that we get a positive
                                      // value to pack
             let r: PyObject = val
@@ -243,14 +243,14 @@ impl<'a> Encoder<'a> {
                 .call_method(self.py, "to_bytes", (size, "little"), None)?
                 .extract(self.py)?;
             let data: &[u8] = b.data(self.py);
-            self.data.write(data)?;
+            self.data.write_all(data)?;
         } else {
-            self.data.push(0 as u8);
+            self.data.push(0_u8);
             let b: PyBytes = val
                 .call_method(self.py, "to_bytes", (size, "little"), None)?
                 .extract(self.py)?;
             let data: &[u8] = b.data(self.py);
-            self.data.write(data)?;
+            self.data.write_all(data)?;
         }
         Ok(())
     }
@@ -280,7 +280,7 @@ impl<'a> Encoder<'a> {
     /// Encode a UTF-8 Atom
     #[inline]
     fn write_atom(&mut self, py_atom: &PyObject) -> CodecResult<()> {
-        let py_text: PyString = PyString::extract(self.py, &py_atom)?;
+        let py_text: PyString = PyString::extract(self.py, py_atom)?;
         let text = py_text.to_string(self.py)?;
         self.write_atom_from_cow(text)
     }
@@ -293,11 +293,11 @@ impl<'a> Encoder<'a> {
         if str_byte_length <= u8::MAX as usize {
             self.data.push(consts::TAG_SMALL_ATOM_UTF8_EXT);
             self.data.push(str_byte_length as u8); // 8bit length
-            self.data.write(byte_array)?; // write &[u8] string content
+            self.data.write_all(byte_array)?; // write &[u8] string content
         } else if str_byte_length <= u16::MAX as usize {
             self.data.push(consts::TAG_ATOM_UTF8_EXT);
             self.data.write_u16::<BigEndian>(str_byte_length as u16)?; // 16bit length
-            self.data.write(byte_array)?; // write &[u8] string content
+            self.data.write_all(byte_array)?; // write &[u8] string content
         } else {
             return Err(CodecError::AtomTooLong);
         }
@@ -317,7 +317,7 @@ impl<'a> Encoder<'a> {
             // Create an optimised byte-array structure and push bytes
             self.data.push(consts::TAG_STRING_EXT);
             self.data.write_u16::<BigEndian>(str_byte_length as u16)?; // 16bit length
-            self.data.write(byte_array)?; // write &[u8] string content
+            self.data.write_all(byte_array)?; // write &[u8] string content
         } else {
             // Create a list structure and push each codepoint as an integer
             self.data.push(consts::TAG_LIST_EXT);
@@ -370,7 +370,7 @@ impl<'a> Encoder<'a> {
         self.data.write_u16::<BigEndian>((id.len() / 4) as u16)?;
         self.write_atom_from_cow(node_name.to_string(self.py)?)?;
         self.data.write_u32::<BigEndian>(creation)?;
-        self.data.write(id)?;
+        self.data.write_all(id)?;
 
         Ok(())
     }
@@ -381,7 +381,7 @@ impl<'a> Encoder<'a> {
         let data: &[u8] = py_bytes.data(self.py);
         self.data.push(consts::TAG_BINARY_EXT);
         self.data.write_u32::<BigEndian>(data.len() as u32)?;
-        self.data.write(data)?;
+        self.data.write_all(data)?;
         Ok(())
     }
 
@@ -397,7 +397,7 @@ impl<'a> Encoder<'a> {
         self.data.push(consts::TAG_BIT_BINARY_EXT);
         self.data.write_u32::<BigEndian>(data.len() as u32)?;
         self.data.push(last_byte_bits);
-        self.data.write(data)?;
+        self.data.write_all(data)?;
         Ok(())
     }
 } // end impl
@@ -413,5 +413,5 @@ fn can_be_encoded_as_byte_string(s: &str) -> bool {
             return false; // is a unicode codepoint with value larger than 255
         }
     }
-    return true; // will fit in a 255-byte latin-1 string
+    true // will fit in a 255-byte latin-1 string
 }

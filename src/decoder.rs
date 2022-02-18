@@ -54,7 +54,7 @@ impl<'a> Decoder<'a> {
         let s8opt = helpers::get_byte_str_opt(py, &opts1)?;
 
         let decode_hook = match opts1.get_item(py, "decode_hook") {
-            Some(ref h1) => PyDict::extract(py, &h1)?,
+            Some(ref h1) => PyDict::extract(py, h1)?,
             None => PyDict::new(py),
         };
 
@@ -163,12 +163,12 @@ impl<'a> Decoder<'a> {
                 match &self.decode_hook.get_item(self.py, type_name_ref) {
                     Some(ref h1) => {
                         let repr1 = h1.call(self.py, (value,), None)?;
-                        return Ok((repr1, tail));
+                        Ok((repr1, tail))
                     }
-                    None => return Ok((value, tail)),
+                    None => Ok((value, tail)),
                 }
             }
-            Err(x) => return Err(x),
+            Err(x) => Err(x),
         }
     }
 
