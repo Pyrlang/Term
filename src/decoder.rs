@@ -120,7 +120,7 @@ impl<'a> Decoder<'a> {
             consts::TAG_BINARY_EXT => self.parse_binary(tail),
             consts::TAG_BIT_BINARY_EXT => self.parse_bitstring(tail),
             consts::TAG_NIL_EXT => {
-                let empty_list = PyList::new(self.py, empty::slice());
+                let empty_list = PyList::new(self.py, &[]);
                 Ok((empty_list.into_object(), tail))
             }
             consts::TAG_LIST_EXT => self.parse_list(tail),

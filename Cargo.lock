@@ -95,15 +95,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "empty"
-version = "0.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e2daa7afb2ef19daf539258a447749c5c940648fd061244fadcd1b5c14613b0"
-dependencies = [
- "void",
-]
-
-[[package]]
 name = "failure"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -174,9 +165,7 @@ dependencies = [
  "byteorder",
  "compress",
  "cpython",
- "empty",
  "failure",
- "lazy_static",
 ]
 
 [[package]]
@@ -419,12 +408,6 @@ name = "version_check"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7716c242968ee87e5542f8021178248f267f295a5c4803beae8b8b7fd9bc6051"
-
-[[package]]
-name = "void"
-version = "1.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a02e4885ed3bc0f2de90ea6dd45ebcbb66dacffe03547fadbb0eeae2770887d"
 
 [[package]]
 name = "wasi"

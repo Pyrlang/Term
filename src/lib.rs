@@ -21,7 +21,6 @@ extern crate byte;
 extern crate byteorder;
 extern crate compress;
 extern crate cpython;
-extern crate empty;
 
 use cpython::*;
 
