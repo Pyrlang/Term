@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use cpython::*;
+use cpython::{FromPyObject, PyDict, PyObject, PyString, Python};
 
-use super::errors::*;
+use super::errors::{CodecError, CodecResult};
 
 /// Get dict value with string key, expect it to be string too, or return
 /// the default value.

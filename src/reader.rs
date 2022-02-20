@@ -1,4 +1,21 @@
-use std::{array::TryFromSliceError, io::{Read, BufRead}};
+// Copyright 2022, Erlang Solutions Ltd, and S2HC Sweden AB
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use thiserror::Error;
+
+use std::array::TryFromSliceError;
+use std::io::{BufRead, Read};
 
 type ReadResult<T> = Result<T, ReadError>;
 
@@ -54,7 +71,7 @@ impl<'a> Reader<'a> {
         if self.offset < self.data.len() {
             Ok(self.data[self.offset])
         } else {
-            Err(ReadError)
+            Err(ReadError::BufferTooShort)
         }
     }
 
@@ -64,7 +81,7 @@ impl<'a> Reader<'a> {
         if self.offset <= self.data.len() {
             Ok(&self.data[old_offset..self.offset])
         } else {
-            Err(ReadError)
+            Err(ReadError::BufferTooShort)
         }
     }
 
@@ -79,10 +96,10 @@ impl<'a> Reader<'a> {
 
 impl<'a> Read for Reader<'a> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-		let to_read = (self.data.len() - self.offset).min(buf.len());
-		let slice = self.read(to_read).unwrap();
-		buf.copy_from_slice(slice);
-		Ok(to_read)
+        let to_read = (self.data.len() - self.offset).min(buf.len());
+        let slice = self.read(to_read).unwrap();
+        buf.copy_from_slice(slice);
+        Ok(to_read)
     }
 }
 
@@ -129,11 +146,10 @@ impl Readable for i32 {
     }
 }
 
-#[derive(Debug)]
-pub struct ReadError;
-
-impl From<TryFromSliceError> for ReadError {
-    fn from(_: TryFromSliceError) -> Self {
-        ReadError
-    }
+#[derive(Debug, Error)]
+pub enum ReadError {
+    #[error("Buffer too short")]
+    BufferTooShort,
+    #[error("Buffer too short to read value")]
+    BufferTooShortForValue(#[from] TryFromSliceError),
 }

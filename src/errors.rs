@@ -20,72 +20,42 @@ use crate::reader::ReadError;
 
 use super::PyCodecError;
 
-#[derive(Debug, Fail)]
+use thiserror::Error;
+
+#[derive(Error, Debug)]
 pub enum CodecError {
-    #[fail(display = "Feature is not implemented yet")]
-    NotImpl,
-    #[fail(display = "ETF version 131 is expected")]
+    #[error("ETF version 131 is expected")]
     UnsupportedETFVersion,
-    #[fail(display = "Input is empty")]
-    EmptyInput,
-    #[fail(display = "Compressed size does not match decompressed")]
+    #[error("Compressed size does not match decompressed")]
     CompressedSizeMismatch,
-    #[fail(display = "Read failed: {}", txt)]
-    ReadError { txt: String },
-    #[fail(display = "{}", txt)]
-    PythonError { txt: String },
-    #[fail(display = "Unrecognized term tag byte: {}", b)]
+    #[error("Read failed")]
+    ReadError(#[from] ReadError),
+    #[error("{txt}")]
+    PythonError { txt: String, error: PyErr },
+    #[error("Unrecognized term tag byte: {}", b)]
     UnknownTermTagByte { b: u8 },
-    #[fail(display = "Bad options passed: {}", txt)]
+    #[error("Bad options passed: {}", txt)]
     BadOptions { txt: String },
-    #[fail(display = "Input too short while decoding a binary")]
-    BinaryInputTooShort,
-    #[fail(display = "Input too short while decoding a string")]
-    StrInputTooShort,
-    //  #[fail(display="Encoding for type {} is not implemented", t)]
-    //  NotImplEncodeForType { t: String },
-    #[fail(
-        display = "Integer {} is too large (> 32bit): big integers not impl",
-        i
-    )]
+    #[error("Integer {} is too large (> 32bit): big integers not impl", i)]
     IntegerEncodingRange { i: i64 },
-    #[fail(display = "Atom text is too long (65535 bytes limit reached)")]
-    AtomTooLong,
-    #[fail(display = "Float value {} is not finite", f)]
+    #[error("Float value {} is not finite", f)]
     NonFiniteFloat { f: f64 },
-    #[fail(display = "IOError: {}", txt)]
-    IOError { txt: String },
-    #[fail(display = "Encoding error")]
-    EncodingError,
+    #[error("IOError")]
+    IOError(#[from] std::io::Error),
+    #[error("Encoding error")]
+    EncodingError(#[from] Utf8Error),
+    #[error("Atom too long")]
+    AtomTooLong,
 }
 
 pub type CodecResult<T> = Result<T, CodecError>;
 
 impl From<PyErr> for CodecError {
-    fn from(err: PyErr) -> CodecError {
+    fn from(err: PyErr) -> Self {
         CodecError::PythonError {
             txt: format!("{:?}", err),
+            error: err,
         }
-    }
-}
-
-impl From<std::io::Error> for CodecError {
-    fn from(err: std::io::Error) -> CodecError {
-        CodecError::IOError {
-            txt: format!("{:?}", err),
-        }
-    }
-}
-
-impl From<ReadError> for CodecError {
-    fn from(_: ReadError) -> CodecError {
-        CodecError::ReadError { txt: "".to_string() }
-    }
-}
-
-impl From<Utf8Error> for CodecError {
-    fn from(_: Utf8Error) -> Self {
-        Self::EncodingError
     }
 }
 

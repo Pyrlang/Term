@@ -15,10 +15,9 @@
 // For cpython macros
 #![allow(unused_braces, clippy::manual_strip)]
 
-#[macro_use]
-extern crate failure;
-
-use cpython::*;
+use cpython::{
+    py_exception, py_fn, py_module_initializer, PyBytes, PyModule, PyObject, PyResult, Python,
+};
 
 use self::decoder::Decoder;
 use self::encoder::Encoder;

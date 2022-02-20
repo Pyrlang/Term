@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use cpython::*;
+use cpython::{
+    FromPyObject, ObjectProtocol, PyBool, PyBytes, PyClone, PyDict, PyList, PyObject, PyString,
+    PyTuple, Python, PythonObject, ToPyObject,
+};
 use flate2::bufread::ZlibDecoder;
 use std::io::Read;
 use std::str;
@@ -20,7 +23,7 @@ use std::str;
 use crate::reader::{Readable, Reader};
 
 use super::consts;
-use super::errors::*;
+use super::errors::{CodecError, CodecResult};
 use super::helpers;
 use super::helpers::{AtomRepresentation, ByteStringRepresentation};
 
@@ -87,7 +90,9 @@ impl<'a> Decoder<'a> {
             let decomp_size = reader.read_u32()? as usize;
 
             let mut decompressed = Vec::with_capacity(decomp_size);
-            unsafe { decompressed.set_len(decomp_size); }
+            unsafe {
+                decompressed.set_len(decomp_size);
+            }
             let mut d = ZlibDecoder::new(reader);
             d.read_exact(&mut decompressed)?;
             if d.total_out() != decomp_size as u64 {

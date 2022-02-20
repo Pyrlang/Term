@@ -15,8 +15,11 @@
 use crate::helpers::VecWriteExt;
 
 use super::consts;
-use super::errors::*;
-use cpython::*;
+use super::errors::{CodecError, CodecResult};
+use cpython::{
+    FromPyObject, NoArgs, ObjectProtocol, PyBytes, PyClone, PyDict, PyList, PyObject, PyString,
+    PyTuple, Python,
+};
 use std::borrow::Cow;
 use std::io::Write;
 use std::{i32, u16, u8};
@@ -235,8 +238,8 @@ impl<'a> Encoder<'a> {
             .extract(self.py)?;
         if ltz {
             self.data.push(1_u8); // we have a negative value
-                                     // we make new object that we multiply with -1 to switch sign, so that we get a positive
-                                     // value to pack
+                                  // we make new object that we multiply with -1 to switch sign, so that we get a positive
+                                  // value to pack
             let r: PyObject = val
                 .call_method(self.py, "__mul__", (-1,), None)?
                 .extract(self.py)?;
