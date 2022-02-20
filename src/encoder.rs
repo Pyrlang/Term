@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::helpers::VecWriteExt;
+
 use super::consts;
 use super::errors::*;
-use byteorder::{BigEndian, WriteBytesExt};
 use cpython::*;
 use std::borrow::Cow;
 use std::io::Write;
@@ -166,7 +167,7 @@ impl<'a> Encoder<'a> {
     fn write_list_no_tail(&mut self, list: &PyList) -> CodecResult<()> {
         let size = list.len(self.py);
         self.data.push(consts::TAG_LIST_EXT);
-        self.data.write_u32::<BigEndian>(size as u32)?;
+        self.data.push_u32(size as u32);
         for i in 0..size {
             let item = list.get_item(self.py, i);
             self.encode(&item)?;
@@ -182,7 +183,7 @@ impl<'a> Encoder<'a> {
             self.data.push(size as u8);
         } else {
             self.data.push(consts::TAG_LARGE_TUPLE_EXT);
-            self.data.write_u32::<BigEndian>(size as u32)?;
+            self.data.push_u32(size as u32);
         }
 
         for i in 0..size {
@@ -197,7 +198,7 @@ impl<'a> Encoder<'a> {
     fn write_dict(&mut self, py_dict: &PyDict) -> CodecResult<()> {
         let size = py_dict.len(self.py);
         self.data.push(consts::TAG_MAP_EXT);
-        self.data.write_u32::<BigEndian>(size as u32)?;
+        self.data.push_u32(size as u32);
 
         for (py_key, py_value) in py_dict.items(self.py) {
             self.encode(&py_key)?;
@@ -226,7 +227,7 @@ impl<'a> Encoder<'a> {
             self.data.push(size as u8);
         } else {
             self.data.push(consts::TAG_LARGE_BIG_EXT);
-            self.data.write_u32::<BigEndian>(size)?;
+            self.data.push_u32(size);
         }
 
         let ltz: bool = val
@@ -262,7 +263,7 @@ impl<'a> Encoder<'a> {
             self.data.push(val as u8);
         } else if val >= i32::MIN as i64 && val <= i32::MAX as i64 {
             self.data.push(consts::TAG_INT);
-            self.data.write_i32::<BigEndian>(val as i32)?;
+            self.data.push_i32(val as i32);
         } else {
             return Err(CodecError::IntegerEncodingRange { i: val });
         }
@@ -273,7 +274,7 @@ impl<'a> Encoder<'a> {
     #[inline]
     fn write_float(&mut self, val: f64) -> CodecResult<()> {
         self.data.push(consts::TAG_NEW_FLOAT_EXT);
-        self.data.write_f64::<BigEndian>(val)?;
+        self.data.push_f64(val);
         Ok(())
     }
 
@@ -296,7 +297,7 @@ impl<'a> Encoder<'a> {
             self.data.write_all(byte_array)?; // write &[u8] string content
         } else if str_byte_length <= u16::MAX as usize {
             self.data.push(consts::TAG_ATOM_UTF8_EXT);
-            self.data.write_u16::<BigEndian>(str_byte_length as u16)?; // 16bit length
+            self.data.push_u16(str_byte_length as u16); // 16bit length
             self.data.write_all(byte_array)?; // write &[u8] string content
         } else {
             return Err(CodecError::AtomTooLong);
@@ -316,13 +317,13 @@ impl<'a> Encoder<'a> {
         if str_byte_length <= u8::MAX as usize && can_be_encoded_as_bytes {
             // Create an optimised byte-array structure and push bytes
             self.data.push(consts::TAG_STRING_EXT);
-            self.data.write_u16::<BigEndian>(str_byte_length as u16)?; // 16bit length
+            self.data.push_u16(str_byte_length as u16); // 16bit length
             self.data.write_all(byte_array)?; // write &[u8] string content
         } else {
             // Create a list structure and push each codepoint as an integer
             self.data.push(consts::TAG_LIST_EXT);
             let chars_count = text.chars().count();
-            self.data.write_u32::<BigEndian>(chars_count as u32)?; // chars, not bytes!
+            self.data.push_u32(chars_count as u32); // chars, not bytes!
             for (_i, ch) in text.char_indices() {
                 self.write_4byte_int(ch as i64)?
             }
@@ -348,9 +349,9 @@ impl<'a> Encoder<'a> {
 
         self.data.push(consts::TAG_NEW_PID_EXT);
         self.write_atom_from_cow(node_name.to_string(self.py)?)?;
-        self.data.write_u32::<BigEndian>(id)?;
-        self.data.write_u32::<BigEndian>(serial)?;
-        self.data.write_u32::<BigEndian>(creation)?;
+        self.data.push_u32(id);
+        self.data.push_u32(serial);
+        self.data.push_u32(creation);
 
         Ok(())
     }
@@ -367,9 +368,9 @@ impl<'a> Encoder<'a> {
         let creation: u32 = FromPyObject::extract(self.py, &py_creation)?;
 
         self.data.push(consts::TAG_NEWER_REF_EXT);
-        self.data.write_u16::<BigEndian>((id.len() / 4) as u16)?;
+        self.data.push_u16((id.len() / 4) as u16);
         self.write_atom_from_cow(node_name.to_string(self.py)?)?;
-        self.data.write_u32::<BigEndian>(creation)?;
+        self.data.push_u32(creation);
         self.data.write_all(id)?;
 
         Ok(())
@@ -380,7 +381,7 @@ impl<'a> Encoder<'a> {
     fn write_binary(&mut self, py_bytes: &PyBytes) -> CodecResult<()> {
         let data: &[u8] = py_bytes.data(self.py);
         self.data.push(consts::TAG_BINARY_EXT);
-        self.data.write_u32::<BigEndian>(data.len() as u32)?;
+        self.data.push_u32(data.len() as u32);
         self.data.write_all(data)?;
         Ok(())
     }
@@ -395,7 +396,7 @@ impl<'a> Encoder<'a> {
         let last_byte_bits: u8 = FromPyObject::extract(self.py, &py_lbb)?;
 
         self.data.push(consts::TAG_BIT_BINARY_EXT);
-        self.data.write_u32::<BigEndian>(data.len() as u32)?;
+        self.data.push_u32(data.len() as u32);
         self.data.push(last_byte_bits);
         self.data.write_all(data)?;
         Ok(())

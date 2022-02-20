@@ -87,3 +87,28 @@ pub fn get_byte_str_opt(py: Python, opts1: &PyDict) -> CodecResult<ByteStringRep
         }
     }
 }
+
+pub trait VecWriteExt {
+    fn push_u32(&mut self, value: u32);
+    fn push_i32(&mut self, value: i32);
+    fn push_u16(&mut self, value: u16);
+    fn push_f64(&mut self, value: f64);
+}
+
+impl VecWriteExt for Vec<u8> {
+    fn push_u32(&mut self, value: u32) {
+        self.extend(value.to_be_bytes());
+    }
+
+    fn push_i32(&mut self, value: i32) {
+        self.extend(value.to_be_bytes());
+    }
+
+    fn push_u16(&mut self, value: u16) {
+        self.extend(value.to_be_bytes());
+    }
+
+    fn push_f64(&mut self, value: f64) {
+        self.extend(value.to_be_bytes());
+    }
+}

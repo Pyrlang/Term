@@ -12,7 +12,5 @@ version = "0.7.0"
 features = ["extension-module"]
 
 [dependencies]
-byte = "0.2"
-compress = "0.2.1"
-failure = "0.1.2"
-byteorder = "1.2.6"
+compress = "0.2"
+failure = "0.1"

@@ -41,12 +41,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "byte"
-version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "665e437b2c88bd7252687e35f915d53677599d94da63a6839ff6cd74b4432a4a"
-
-[[package]]
 name = "byteorder"
 version = "1.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -161,8 +155,6 @@ checksum = "2efc7bc57c883d4a4d6e3246905283d8dae951bb3bd32f49d6ef297f546e1c39"
 name = "native_codec_impl"
 version = "1.4.0"
 dependencies = [
- "byte",
- "byteorder",
  "compress",
  "cpython",
  "failure",

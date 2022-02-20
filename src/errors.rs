@@ -12,7 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::{convert::From, str::Utf8Error};
+
 use cpython::*;
+
+use crate::reader::ReadError;
 
 use super::PyCodecError;
 
@@ -51,11 +55,13 @@ pub enum CodecError {
     NonFiniteFloat { f: f64 },
     #[fail(display = "IOError: {}", txt)]
     IOError { txt: String },
+    #[fail(display = "Encoding error")]
+    EncodingError,
 }
 
 pub type CodecResult<T> = Result<T, CodecError>;
 
-impl std::convert::From<PyErr> for CodecError {
+impl From<PyErr> for CodecError {
     fn from(err: PyErr) -> CodecError {
         CodecError::PythonError {
             txt: format!("{:?}", err),
@@ -63,7 +69,7 @@ impl std::convert::From<PyErr> for CodecError {
     }
 }
 
-impl std::convert::From<std::io::Error> for CodecError {
+impl From<std::io::Error> for CodecError {
     fn from(err: std::io::Error) -> CodecError {
         CodecError::IOError {
             txt: format!("{:?}", err),
@@ -71,15 +77,19 @@ impl std::convert::From<std::io::Error> for CodecError {
     }
 }
 
-impl std::convert::From<byte::Error> for CodecError {
-    fn from(err: byte::Error) -> CodecError {
-        CodecError::ReadError {
-            txt: format!("{:?}", err),
-        }
+impl From<ReadError> for CodecError {
+    fn from(_: ReadError) -> CodecError {
+        CodecError::ReadError { txt: "".to_string() }
     }
 }
 
-impl std::convert::From<CodecError> for PyErr {
+impl From<Utf8Error> for CodecError {
+    fn from(_: Utf8Error) -> Self {
+        Self::EncodingError
+    }
+}
+
+impl From<CodecError> for PyErr {
     /// Somehow this works. Create a PyErr struct without traceback, containing
     /// a PyCodecError created from Rust CodecError with string explanation.
     fn from(err: CodecError) -> PyErr {

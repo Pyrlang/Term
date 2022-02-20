@@ -17,14 +17,12 @@
 
 #[macro_use]
 extern crate failure;
-extern crate byte;
-extern crate byteorder;
 extern crate compress;
 extern crate cpython;
 
 use cpython::*;
 
-use self::decoder::{wrap_decode_result, Decoder};
+use self::decoder::Decoder;
 use self::encoder::Encoder;
 use self::errors::pyresult_from;
 
@@ -33,19 +31,22 @@ mod decoder;
 mod encoder;
 mod errors;
 mod helpers;
+mod reader;
 
 py_exception!(native_codec_impl, PyCodecError);
 
 /// Strips 131 byte header and unpacks if the data was compressed.
 fn binary_to_term(py: Python, b: PyBytes, opts: PyObject) -> PyResult<PyObject> {
     let mut dec_state = Decoder::new(py, opts)?;
-    pyresult_from(dec_state.decode_with_131tag(b.data(py)))
+    let mut reader = b.data(py).into();
+    pyresult_from(dec_state.decode_with_131tag(&mut reader))
 }
 
 fn binary_to_term_2(py: Python, b: PyBytes, opts: PyObject) -> PyResult<PyObject> {
     let mut dec_state = Decoder::new(py, opts)?;
-    let result = dec_state.decode(b.data(py));
-    pyresult_from(wrap_decode_result(py, result))
+    let mut reader = b.data(py).into();
+    let result = dec_state.decode(&mut reader);
+    pyresult_from(result)
 }
 
 fn term_to_binary(py: Python, py_term: PyObject, opt: PyObject) -> PyResult<PyBytes> {
