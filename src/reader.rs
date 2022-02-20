@@ -1,4 +1,4 @@
-use std::{array::TryFromSliceError, io::Read};
+use std::{array::TryFromSliceError, io::{Read, BufRead}};
 
 type ReadResult<T> = Result<T, ReadError>;
 
@@ -83,6 +83,16 @@ impl<'a> Read for Reader<'a> {
 		let slice = self.read(to_read).unwrap();
 		buf.copy_from_slice(slice);
 		Ok(to_read)
+    }
+}
+
+impl<'a> BufRead for Reader<'a> {
+    fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+        Ok(self.rest())
+    }
+
+    fn consume(&mut self, amt: usize) {
+        self.offset += amt;
     }
 }
 

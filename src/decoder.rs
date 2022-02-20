@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use compress::zlib;
 use cpython::*;
-use std::io::{BufReader, Read};
+use flate2::bufread::ZlibDecoder;
+use std::io::Read;
 use std::str;
 
 use crate::reader::{Readable, Reader};
@@ -86,10 +86,11 @@ impl<'a> Decoder<'a> {
             reader.read_u8().unwrap();
             let decomp_size = reader.read_u32()? as usize;
 
-            let mut decompressed = Vec::<u8>::with_capacity(decomp_size);
-            let mut d = zlib::Decoder::new(reader);
-            d.read_to_end(&mut decompressed).unwrap();
-            if decompressed.len() != decomp_size as usize {
+            let mut decompressed = Vec::with_capacity(decomp_size);
+            unsafe { decompressed.set_len(decomp_size); }
+            let mut d = ZlibDecoder::new(reader);
+            d.read_exact(&mut decompressed)?;
+            if d.total_out() != decomp_size as u64 {
                 return Err(CodecError::CompressedSizeMismatch);
             }
 

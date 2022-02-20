@@ -17,8 +17,6 @@
 
 #[macro_use]
 extern crate failure;
-extern crate compress;
-extern crate cpython;
 
 use cpython::*;
 
