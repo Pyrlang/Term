@@ -512,7 +512,7 @@ def _pack_int(val: int):
     if 0 <= val < 256:
         return bytes([TAG_SMALL_INT, val])
     size = val.bit_length()
-    if size <= 32:
+    if size < 32:
         return bytes([TAG_INT]) + util.to_i32(val)
     # we get here we're packing smal or large big
     sign = 0 if 0 <= val else 1
