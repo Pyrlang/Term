@@ -69,6 +69,7 @@ TAG_NEWER_REF_EXT = 90
 
 EncodeHookType = Optional[dict[str, Callable[[Any], Any]]]
 
+
 # This is Python variant of codec exception when Python impl is used.
 # Otherwise native lib defines its own exception with same name.
 # To use this, import via codec.py
@@ -91,9 +92,8 @@ def binary_to_term(data: bytes, options: Optional[dict] = None) -> tuple[Term, b
 
         :param data: The incoming encoded data with the 131 byte
         :param options:
-               * "atom": "str" | "bytes" | "Atom" | "StrictAtom" (default
-                 "Atom"). Returns atoms as strings, as bytes or as atom.Atom
-                 objects.
+               * "atom": "str" | "bytes" | "Atom" | "StrictAtom" (default "Atom").
+                 Returns atoms as strings, as bytes or as atom.Atom objects.
                * "byte_string": "str" | "bytes" | "int_list" (default "str").
                  Returns 8-bit strings as Python str or bytes or list of integers.
                * "decode_hook" : callable. Python function called for each
@@ -127,8 +127,8 @@ def binary_to_term(data: bytes, options: Optional[dict] = None) -> tuple[Term, b
         return val, rem
 
 
-def _bytes_to_atom(name: bytes, encoding: str, create_atom_fn: Callable) -> Optional[
-    Union[Atom, bool]]:
+def _bytes_to_atom(name: bytes, encoding: str, create_atom_fn: Callable) \
+        -> Optional[Union[Atom, bool]]:
     """ Recognize familiar atom values. """
     if name == b'true':
         return True
@@ -210,13 +210,12 @@ def binary_to_term_2(data: bytes, options: Optional[dict] = None) -> tuple[Term,
         object and bitstrings into a pair of ``(bytes, last_byte_bits:int)``.
 
         :param options: dict(str, _);
-                * "atom": "str" | "bytes" | "Atom" | "StrictAtom"; default
-                "Atom".
+                * "atom": "str" | "bytes" | "Atom" | "StrictAtom"; default "Atom".
                   Returns atoms as strings, as bytes or as atom.Atom class objects
                 * "atom_call": callable object that will get str as input the
                   returned value will be used as atom representation
-               * "byte_string": "str" | "bytes" | "int_list" (default "str").
-                 Returns 8-bit strings as Python str or bytes or int list.
+                * "byte_string": "str" | "bytes" | "int_list" (default "str").
+                  Returns 8-bit strings as Python str or bytes or int list.
         :param data: Bytes containing encoded term without 131 header
         :rtype: Tuple[Value, Tail: bytes]
         :return: The function consumes as much data as
@@ -230,7 +229,7 @@ def binary_to_term_2(data: bytes, options: Optional[dict] = None) -> tuple[Term,
     atom_call_opt = options.get("atom_call")
     create_atom_fn = _get_create_atom_fn(
         options.get("atom", "Atom"),
-        atom_call_opt if callable(atom_call_opt) else lambda s: Atom(s))
+        atom_call_opt if callable(atom_call_opt) else None)
     create_str_fn = _get_create_str_fn(options.get("byte_string", "str"))
 
     tag = data[0]
@@ -335,9 +334,9 @@ def binary_to_term_2(data: bytes, options: Optional[dict] = None) -> tuple[Term,
 
         assert isinstance(node, Atom)
         pid1 = Pid(node_name=node,
-                  id=id1,
-                  serial=serial,
-                  creation=creation)
+                   id=id1,
+                   serial=serial,
+                   creation=creation)
         return pid1, tail[9:]
 
     if tag == TAG_NEW_PID_EXT:
@@ -348,9 +347,9 @@ def binary_to_term_2(data: bytes, options: Optional[dict] = None) -> tuple[Term,
 
         assert isinstance(node, Atom)
         pid2 = Pid(node_name=node,
-                  id=id1,
-                  serial=serial,
-                  creation=creation)
+                   id=id1,
+                   serial=serial,
+                   creation=creation)
         return pid2, tail[12:]
 
     if tag == TAG_NEW_REF_EXT:
