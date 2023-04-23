@@ -14,14 +14,15 @@
 import random
 import struct
 import time
+from typing import Union
 
-from term import util
-from term.atom import Atom
+from term import util, Atom
+from term.basetypes import BaseRef, Term
 
 REF_MARKER = "pyrlang.Ref"
 
 
-class Reference:
+class Reference(BaseRef):
     """ Represents a reference value from Erlang, typically it has 12 bytes of
         unique data, but it might change.
     """
@@ -41,8 +42,8 @@ class Reference:
                          creation=creation,
                          refid=rand_bytes)
 
-    def __init__(self, node_name: str, creation: int, refid: bytes) -> None:
-        self.node_name_ = node_name
+    def __init__(self, node_name: Term, creation: int, refid: bytes) -> None:
+        self.node_name_ = Atom.from_string_or_atom(node_name)
         """ Node the ref comes from. NOTE: native codec assumes this is a string. """
 
         self.id_ = refid
@@ -56,7 +57,7 @@ class Reference:
         if len(self.id_) == 12:
             v = struct.unpack(">III", self.id_)
             return "Ref<%d,%d,%d,%d>@%s" % \
-                   (self.creation_, v[0], v[1], v[2], self.node_name_)
+                (self.creation_, v[0], v[1], v[2], self.node_name_)
         else:
             return "Ref<%d,%s>" % (self.creation_,
                                    util.hex_bytes(self.id_, ","))
@@ -68,9 +69,9 @@ class Reference:
 
     def equals(self, other) -> bool:
         return isinstance(other, Reference) \
-               and self.node_name_ == other.node_name_ \
-               and self.id_ == other.id_ \
-               and self.creation_ == other.creation_
+            and self.node_name_ == other.node_name_ \
+            and self.id_ == other.id_ \
+            and self.creation_ == other.creation_
 
     __eq__ = equals
 

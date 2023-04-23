@@ -4,8 +4,9 @@
 """
 import logging
 
-LOG = logging.getLogger("term")
+from term.basetypes import BaseTerm, Term
 
+LOG = logging.getLogger("term")
 
 try:
     import term.native_codec_impl as co_impl
@@ -14,7 +15,7 @@ except ImportError:
     import term.py_codec_impl as co_impl
 
 
-def binary_to_term(data: bytes, options=None, decode_hook=None):
+def binary_to_term(data: bytes, options=None, decode_hook=None) -> tuple[Term, bytes]:
     """
     Strip 131 header and unpack if the data was compressed.
 
@@ -32,7 +33,7 @@ def binary_to_term(data: bytes, options=None, decode_hook=None):
                 object types.
     :raises PyCodecError: when the tag is not 131, when compressed
                           data is incomplete or corrupted
-    :returns: Remaining unconsumed bytes
+    :returns: Value and Remaining unconsumed bytes
     """
     opt = options if options else {}
     if decode_hook:
@@ -56,12 +57,13 @@ def term_to_binary(term: object, options=None, encode_hook=None):
     :returns: Bytes, the term object encoded with erlang binary term format
     """
     opt = options if options else {}
-    if options and hasattr(options.get('encode_hook', {}) , '__call__'): 
+    if options and hasattr(options.get('encode_hook', {}), '__call__'):
         # legacy encode_hook as single function transformed to 'catch_all' in new encode_hook dict
         opt['encode_hook'] = {'catch_all': options.get('encode_hook')}
     elif encode_hook:
         opt['encode_hook'] = encode_hook
     return co_impl.term_to_binary(term, opt)
+
 
 PyCodecError = co_impl.PyCodecError
 

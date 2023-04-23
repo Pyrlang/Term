@@ -1,4 +1,7 @@
-class BitString:
+from term.basetypes import BaseTerm
+
+
+class BitString(BaseTerm):
     """ A simple data holder to be able to pass bitstrings (bytes with
         incomplete last byte) back to Erlang/Elixir node.
     """

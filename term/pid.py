@@ -11,8 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-from term.bases import BasePid
+from term.basetypes import BasePid
 
 PID_MARKER = "pyrlang.Pid"
 
@@ -52,10 +51,10 @@ class Pid(BasePid):
 
     def equals(self, other) -> bool:
         return isinstance(other, Pid) \
-               and self.node_name_ == other.node_name_ \
-               and self.id_ == other.id_ \
-               and self.serial_ == other.serial_ \
-               and self.creation_ == other.creation_
+            and self.node_name_ == other.node_name_ \
+            and self.id_ == other.id_ \
+            and self.serial_ == other.serial_ \
+            and self.creation_ == other.creation_
 
     __eq__ = equals
 
