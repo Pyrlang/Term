@@ -14,17 +14,15 @@ The extension or Python implementation is selected automatically when you import
 extension was not found, a warning will be logged and the Python implementation
 will be used.
 
-Installing
----
+## Installing
 
-If you just run
+### From PyPI
 
+If you just run 
 ```
 pip install pyrlang-term
 ```
-
-The pure python version will be installed unless there exists a pre built
-binary.
+the pure python version will be installed unless there exists a pre built binary.
 
 If you want to build the native one, you'll need rust and a few more packages.
 
@@ -41,8 +39,12 @@ pip install setuptools-rust semantic_version
 pip install pyrlang-term
 ```
 
-Testing
----
+### From Source
+
+1. Clone [Term](https://github.com/Pyrlang/Term) repository
+2. Install Term from source: Go to Term directory and `pip install -e .`
+
+## Testing
 
 To run the tests:
 
@@ -51,8 +53,7 @@ python -m unittest discover test
 ```
 
 
-Atoms
----
+## Atoms
 
 The native representation of atoms are found in `term.atom`. There are Two
 classes, `Atom` and `StrictAtom`. `Atom` is the default, it will become an

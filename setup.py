@@ -1,6 +1,6 @@
 from setuptools import setup
 
-VERSION = '1.4'
+VERSION = '1.5-alpha'
 PKGNAME = "pyrlang-term"
 MODULENAME = "term"
 DESCR = 'Erlang term and External Term Format codec in Python and native Rust extension'
