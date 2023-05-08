@@ -52,7 +52,7 @@ def list_to_unicode_str(lst: list) -> str:
     return "".join(map(chr, lst))
 
 
-def list_to_str(lst: list[int]) -> str:
+def list_to_str(lst: List[int]) -> str:
     """ A helper function to convert a list of bytes (0..255) into an
         ASCII string. """
     return bytearray(lst).decode('utf-8')

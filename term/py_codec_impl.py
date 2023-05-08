@@ -17,7 +17,7 @@
 """
 import math
 import struct
-from typing import Callable, Union, Optional, Any, Type
+from typing import Callable, Union, Optional, Any, Type, Dict, Tuple, Set
 
 from zlib import decompressobj
 
@@ -67,7 +67,7 @@ TAG_STRING_EXT = 107
 TAG_NEW_PID_EXT = 88
 TAG_NEWER_REF_EXT = 90
 
-EncodeHookType = Optional[dict[str, Callable[[Any], Any]]]
+EncodeHookType = Optional[Dict[str, Callable[[Any], Any]]]
 
 
 # This is Python variant of codec exception when Python impl is used.
@@ -87,7 +87,7 @@ def incomplete_data(where=""):
         raise PyCodecError("Incomplete data")
 
 
-def binary_to_term(data: bytes, options: Optional[dict] = None) -> tuple[Term, bytes]:
+def binary_to_term(data: bytes, options: Optional[dict] = None) -> Tuple[Term, bytes]:
     """ Strip 131 header and unpack if the data was compressed.
 
         :param data: The incoming encoded data with the 131 byte
@@ -193,7 +193,7 @@ def _get_create_str_fn(opt: str) -> Callable:
     raise PyCodecError("Option 'byte_string' is '%s'; expected 'str', 'bytes'")
 
 
-def binary_to_term_2(data: bytes, options: Optional[dict] = None) -> tuple[Term, bytes]:
+def binary_to_term_2(data: bytes, options: Optional[dict] = None) -> Tuple[Term, bytes]:
     """ Proceed decoding after leading tag has been checked and removed.
 
         Erlang lists are decoded into ``term.List`` object, whose ``elements_``
@@ -575,7 +575,7 @@ def _is_a_simple_object(obj):
         or isinstance(obj, Reference)
 
 
-def generic_serialize_object(obj, cycle_detect: Optional[set[int]] = None):
+def generic_serialize_object(obj, cycle_detect: Optional[Set[int]] = None):
     """ Given an arbitraty Python object creates a tuple (ClassName, {Fields}).
         A fair effort is made to avoid infinite recursion on cyclic objects.
         :param obj: Arbitrary object to encode
