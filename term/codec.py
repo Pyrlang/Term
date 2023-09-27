@@ -3,6 +3,7 @@
     but always works.
 """
 import logging
+from typing import Tuple
 
 from term.basetypes import BaseTerm, Term
 
@@ -15,7 +16,7 @@ except ImportError:
     import term.py_codec_impl as co_impl
 
 
-def binary_to_term(data: bytes, options=None, decode_hook=None) -> tuple[Term, bytes]:
+def binary_to_term(data: bytes, options=None, decode_hook=None) -> Tuple[Term, bytes]:
     """
     Strip 131 header and unpack if the data was compressed.
 
