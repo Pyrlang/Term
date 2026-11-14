@@ -1505,8 +1505,12 @@ def test_decode_fun(codec: ModuleType) -> None:
 
 
 def test_decode_compressed(codec: ModuleType) -> None:
-    """tries to decode compressed data"""
-    compressed_data = b"\x83P\x00\x00\x01\xc4x\x9c5\x90QR\x831\x08\x84\xebM\xf6\x00\x9d\x9eB\xdf|\xf5\x00\x98\xd0\xcaL\x08i\x02\x9d\xde\xce\xabI\xfc\xf5-\x04Xv?=\x9d^\xbe\xdfm\xb2B\xc6\nE\xb5f\x13K\x1c\xa4\xecg\x14\xeb\x8b\x8b\xb3\xc7\x04U\x19\xb2\xa4H\xbf\x81\x9bdwq\xcd\r\xb0\xc4R\xabp\xd6\x91\xdb\xd2\x8bT\xa9\xd1\x1d\xe1h\xf4\x99\xfa`?\xb4\x19J\xb7N\xa0&\xf7\xa0\x0b>\x1c\xdcES\x1c*\xfb\xf1\xc8\x92\xf4\x8c{\xc8B\xb7\xe53*\xf8\xc9\xb3\x88\x93\x8buDk\xa4\xc5\x0e\xe5=\x94\xa6\xf6\xa5_I\x199\x0c\xa6t\xae\xe9\xc9\x8e\x04y\xca/x\xdd\x92\x14\xce\x90\x19\xe9\xe4\x08+\x1d\x93\xc7\xe4/\xee\x95g&\xcf\x8f\x87\xb5\x18y\x8e\xd3N&\x05\xaf\xc5(\xd2\xda?\xa2\x0c\x14\xb8\xc6M\xc8\xd1\xb7!\x0c\x9aY\xc4\xbc\xe0\xedYx8\xc7\xe6\x98\x0c\xac\x14\xe2\x92s%\x86T\xf2\xbd\x91)\xc64\xa9\xdc7\xc5M*\x8f\x96h\x83vn\xd8\xf5\x9a\x98\t\x95\x17\xcf\xddUk\xdb\x06m@\x928\xd6\x1f\xd7\xd0\x0b~\x00"
+    """tries to decode compressed data: what OTP 29 writes for
+    term_to_binary(<<"Lorem...">>, [compressed]). The vector used before had
+    its zlib checksum cut off; OTP rejects that."""
+    compressed_data = bytes.fromhex(
+        "8350000001c4789c3590515283310884eb4df6009d9e42df7cf50098d0ca4c0869029ddeceab49fcf52d0458763f3d9d5ebedf6db242c60a45b566134b1ca4ec6714eb8b8bb3c7045519b2a448bf819b647771cd0db0c452ab70d691dbd28b54a9d11de168f499fa603fb4194ab74ea026f7a00b3e1cdc45531c2afbf1c892f48c7bc842b7e5332af8c9b388938b75446ba4c50ee53d94a6f6a55f4919390ca674aee9c98e0479ca2f78dd9214ce9019e9e4082b1d93c7e42fee956726cf8f87b518798ed34e2605afc528d2da3fa20c14b8c64dc8d1b7210c9a59c4bce0ed597838c7e6980cac14e29273258654f2bd9129c634a9dc37c54d2a8f966883766ed8f59a98099517cfdd556bdb066d409238d61fd7d00b7e000c0ea6bf"
+    )
     decoded_data = b"Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum. "
     val, tail = codec.binary_to_term(compressed_data, None)
     assert val == decoded_data
@@ -1521,7 +1525,9 @@ def test_decode_hook_compressed(codec: ModuleType) -> None:
     def unicode_hook(x: bytes) -> str:
         return x.decode()
 
-    compressed_data = b"\x83P\x00\x00\x01\xc4x\x9c5\x90QR\x831\x08\x84\xebM\xf6\x00\x9d\x9eB\xdf|\xf5\x00\x98\xd0\xcaL\x08i\x02\x9d\xde\xce\xabI\xfc\xf5-\x04Xv?=\x9d^\xbe\xdfm\xb2B\xc6\nE\xb5f\x13K\x1c\xa4\xecg\x14\xeb\x8b\x8b\xb3\xc7\x04U\x19\xb2\xa4H\xbf\x81\x9bdwq\xcd\r\xb0\xc4R\xabp\xd6\x91\xdb\xd2\x8bT\xa9\xd1\x1d\xe1h\xf4\x99\xfa`?\xb4\x19J\xb7N\xa0&\xf7\xa0\x0b>\x1c\xdcES\x1c*\xfb\xf1\xc8\x92\xf4\x8c{\xc8B\xb7\xe53*\xf8\xc9\xb3\x88\x93\x8buDk\xa4\xc5\x0e\xe5=\x94\xa6\xf6\xa5_I\x199\x0c\xa6t\xae\xe9\xc9\x8e\x04y\xca/x\xdd\x92\x14\xce\x90\x19\xe9\xe4\x08+\x1d\x93\xc7\xe4/\xee\x95g&\xcf\x8f\x87\xb5\x18y\x8e\xd3N&\x05\xaf\xc5(\xd2\xda?\xa2\x0c\x14\xb8\xc6M\xc8\xd1\xb7!\x0c\x9aY\xc4\xbc\xe0\xedYx8\xc7\xe6\x98\x0c\xac\x14\xe2\x92s%\x86T\xf2\xbd\x91)\xc64\xa9\xdc7\xc5M*\x8f\x96h\x83vn\xd8\xf5\x9a\x98\t\x95\x17\xcf\xddUk\xdb\x06m@\x928\xd6\x1f\xd7\xd0\x0b~\x00"
+    compressed_data = bytes.fromhex(
+        "8350000001c4789c3590515283310884eb4df6009d9e42df7cf50098d0ca4c0869029ddeceab49fcf52d0458763f3d9d5ebedf6db242c60a45b566134b1ca4ec6714eb8b8bb3c7045519b2a448bf819b647771cd0db0c452ab70d691dbd28b54a9d11de168f499fa603fb4194ab74ea026f7a00b3e1cdc45531c2afbf1c892f48c7bc842b7e5332af8c9b388938b75446ba4c50ee53d94a6f6a55f4919390ca674aee9c98e0479ca2f78dd9214ce9019e9e4082b1d93c7e42fee956726cf8f87b518798ed34e2605afc528d2da3fa20c14b8c64dc8d1b7210c9a59c4bce0ed597838c7e6980cac14e29273258654f2bd9129c634a9dc37c54d2a8f966883766ed8f59a98099517cfdd556bdb066d409238d61fd7d00b7e000c0ea6bf"
+    )
     decoded_data = "Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum. "
 
     val, tail = codec.binary_to_term(

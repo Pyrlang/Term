@@ -28,6 +28,29 @@ pub enum CodecError {
     UnsupportedETFVersion,
     #[error("Compressed size does not match decompressed")]
     CompressedSizeMismatch,
+    // The zlib stream of a compressed term ends before its checksum.
+    #[error("Compressed term: the zlib stream is incomplete")]
+    CompressedIncomplete,
+    // A compressed term declares more data than option "max_size" allows.
+    #[error("Compressed term declares {declared} bytes, more than max_size {max_size}")]
+    CompressedTooLarge { declared: usize, max_size: usize },
+    // zlib rejected the stream of a compressed term.
+    #[error("Compressed term: {txt}")]
+    Compressed { txt: String },
+    // A count field larger than the remaining input could hold.
+    #[error("{what} declares {count} elements but only {remaining} bytes remain")]
+    TooManyElements {
+        what: &'static str,
+        count: usize,
+        remaining: usize,
+    },
+    // Nesting beyond option "max_depth".
+    #[error("Term is nested deeper than max_depth {max_depth}")]
+    TooDeep { max_depth: usize },
+    // A fun frame finished without its four fixed parts (cannot happen:
+    // the frame always expects at least four children).
+    #[error("Fun is missing Module, OldIndex, OldUniq or Pid")]
+    BadFun,
     #[error("Read failed: {0}")]
     ReadError(#[from] ReadError),
     // A Python call failed (a user hook raised, a type check failed); the
@@ -59,8 +82,6 @@ pub enum CodecError {
     TooLong { size: usize },
     #[error("Float value {} is not finite", f)]
     NonFiniteFloat { f: f64 },
-    #[error("IOError: {0}")]
-    IOError(#[from] std::io::Error),
     #[error("Encoding error")]
     EncodingError(#[from] Utf8Error),
     #[error("Atom too long")]

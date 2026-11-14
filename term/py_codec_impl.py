@@ -110,19 +110,37 @@ def binary_to_term(data: bytes, options: OptionsType = None) -> tuple[Term, byte
 
     if reader.peek() == TAG_COMPRESSED:
         reader.u8()
-        decomp_size = reader.u32()
-        do = decompressobj()
-        try:
-            decode_data = do.decompress(reader.rest()) + do.flush()
-        except zlib_error as e:
-            raise PyCodecError("Compressed term: %s" % e) from e
-        if len(decode_data) != decomp_size:
-            # Data corruption?
-            raise PyCodecError("Compressed size mismatch with actual")
-        reader = _Reader(decode_data)
+        reader = _Reader(_inflate(reader.u32(), reader.rest(), dec.max_size_))
 
     value = dec.decode(reader)
     return value, reader.rest()
+
+
+def _inflate(declared: int, compressed: bytes, max_size: int) -> bytes:
+    """The data of a compressed term: exactly ``declared`` bytes and a
+    complete zlib stream. Inflates at most ``declared + 1`` bytes, so a
+    stream that holds more fails without producing it."""
+    if declared > max_size:
+        raise PyCodecError(
+            "Compressed term declares %d bytes, more than max_size %d"
+            % (declared, max_size)
+        )
+    do = decompressobj()
+    try:
+        data = do.decompress(compressed, declared + 1)
+    except zlib_error as e:
+        raise PyCodecError("Compressed term: %s" % e) from e
+    if len(data) > declared:
+        raise PyCodecError(
+            "Compressed term holds more than the declared %d bytes" % declared
+        )
+    if not do.eof:
+        raise PyCodecError("Compressed term: the zlib stream is incomplete")
+    if len(data) != declared:
+        raise PyCodecError(
+            "Compressed term holds %d bytes, declared %d" % (len(data), declared)
+        )
+    return data
 
 
 # Big-endian fixed-size fields of the external term format.
@@ -261,6 +279,21 @@ def _get_create_str_fn(opt: object) -> Callable[[bytes], Union[str, bytes, list[
     )
 
 
+# Default of option "max_depth": how deeply terms may nest.
+DEFAULT_MAX_DEPTH = 4096
+
+# Default of option "max_size": the largest size, in bytes, that a compressed
+# term may declare for its data (256 MiB).
+DEFAULT_MAX_SIZE = 256 * 1024 * 1024
+
+
+def _positive_int_option(options: dict[str, Any], name: str, default: int) -> int:
+    value = options.get(name, default)
+    if type(value) is not int or value < 1:
+        raise PyCodecError("Option %r is %r; expected a positive int" % (name, value))
+    return value
+
+
 def _user_error(e: Exception) -> PyCodecError:
     """A PyCodecError for an exception raised by an option callable; the
     caller raises it ``from e`` so the original stays reachable."""
@@ -291,6 +324,8 @@ class _Decoder:
                 "Option 'bitstring' is %r; expected 'tuple', 'BitString'" % (bitstring,)
             )
         self.bitstring_as_tuple_ = bitstring == "tuple"
+        self.max_depth_ = _positive_int_option(options, "max_depth", DEFAULT_MAX_DEPTH)
+        self.max_size_ = _positive_int_option(options, "max_size", DEFAULT_MAX_SIZE)
 
     def bitstring(self, value: bytes, bits: int) -> Any:
         """A bitstring as the options ask: ``(bytes, bits)`` or ``BitString``."""
@@ -312,17 +347,49 @@ class _Decoder:
         except Exception as e:  # user code (atom_call) may raise anything
             raise _user_error(e) from e
 
-    def decode(self, reader: _Reader) -> Any:
-        """Decode one term and pass it through the decode hook of its type."""
-        value = _decode_term(self, reader)
+    def hook(self, value: Any) -> Any:
+        """``value`` passed through the decode hook of its type, if any."""
         if self.decode_hook_:
             hook = self.decode_hook_.get(type(value).__name__)
             if hook is not None:
                 try:
-                    value = hook(value)
+                    return hook(value)
                 except Exception as e:  # user code may raise anything
                     raise _user_error(e) from e
         return value
+
+    def decode(self, reader: _Reader) -> Any:
+        """Decode one term; every value in it, the term itself included,
+        passes through the decode hook of its type, children first.
+
+        Iterative: compound terms wait on an explicit stack of ``_Frame``,
+        at most ``max_depth`` of them, so neither Python's recursion limit
+        nor the C stack bounds the nesting (as in the native codec).
+        """
+        stack: list[_Frame] = []
+        while True:
+            value = _start_term(self, reader)
+            hooked = False
+            if isinstance(value, _Frame):
+                value, hooked = value.open(reader)
+                if isinstance(value, _Frame):
+                    if len(stack) >= self.max_depth_:
+                        raise PyCodecError(
+                            "Term is nested deeper than max_depth %d" % self.max_depth_
+                        )
+                    stack.append(value)
+                    continue
+            # Pass finished values up to the frames waiting for them.
+            while True:
+                if not hooked:
+                    value = self.hook(value)
+                if not stack:
+                    return value
+                frame = stack[-1]
+                value, hooked = frame.add(self, value, reader)
+                if value is frame:
+                    break  # the frame needs more children
+                stack.pop()
 
 
 def _decode_node(reader: _Reader) -> Atom:
@@ -381,63 +448,115 @@ def binary_to_term_2(data: bytes, options: OptionsType = None) -> tuple[Term, by
     return value, reader.rest()
 
 
-def _decode_list(dec: _Decoder, reader: _Reader) -> Any:
-    count = reader.u32()
-    elements = [dec.decode(reader) for _ in range(count)]
-    # A NIL tail makes a proper list; it is not a value of its own, so no
-    # decode hook sees it.
-    if reader.peek() == TAG_NIL_EXT:
-        reader.u8()
-        return elements
-    tail = dec.decode(reader)
-    if not elements:
-        # A zero-length list is its tail: <<108,0,0,0,0,97,42>> is 42
-        # (binary_SUITE:robustness).
-        return tail
-    return ImproperList(elements, tail)
+# Kinds of _Frame: the compound term being decoded.
+_LIST = 0  # LIST_EXT elements
+_LIST_TAIL = 1  # LIST_EXT tail that is not NIL
+_TUPLE = 2
+_MAP = 3  # keys and values in turn
+_FUN = 4  # NEW_FUN_EXT: Module, OldIndex, OldUniq, Pid, then free variables
+
+# _Frame.key_ while a map waits for a key, not a value.
+_NO_KEY: Any = object()
 
 
-def _decode_map(dec: _Decoder, reader: _Reader) -> dict[Any, Any]:
-    count = reader.u32()
-    result: dict[Any, Any] = {}
-    for _ in range(count):
-        key = dec.decode(reader)
-        value = dec.decode(reader)
-        try:
-            result[key] = value
-        except TypeError as e:
-            raise PyCodecError(
-                "Map key of type %s is not hashable" % type(key).__name__
-            ) from e
-    return result
+# A compound term whose children are being decoded (see _Decoder.decode).
+class _Frame:
+    __slots__ = ("kind_", "items_", "remaining_", "key_", "fun_")
+
+    def __init__(
+        self,
+        kind: int,
+        remaining: int,
+        items: Any,
+        fun: Optional[tuple[int, bytes, int]] = None,
+    ) -> None:
+        self.kind_ = kind
+        self.remaining_ = remaining  # children still to come
+        self.items_ = items  # list of children; a dict for a map
+        self.key_: Any = _NO_KEY
+        self.fun_ = fun  # (arity, uniq, index) of a fun
+
+    def open(self, reader: _Reader) -> tuple[Any, bool]:
+        """Just started: itself if children follow, else ``(value, hooked)``."""
+        if self.remaining_:
+            return self, False
+        if self.kind_ == _LIST:
+            return self._list_end(reader)
+        if self.kind_ == _TUPLE:
+            return (), False
+        return self.items_, False  # an empty map
+
+    def _list_end(self, reader: _Reader) -> tuple[Any, bool]:
+        # A NIL tail makes a proper list; it is not a value of its own, so
+        # no decode hook sees it. Any other tail is decoded next.
+        if reader.peek() == TAG_NIL_EXT:
+            reader.u8()
+            return self.items_, False
+        self.kind_ = _LIST_TAIL
+        return self, False
+
+    def add(self, dec: "_Decoder", value: Any, reader: _Reader) -> tuple[Any, bool]:
+        """Take the next child: itself while more follow, else the finished
+        term as ``(value, hooked)``."""
+        kind = self.kind_
+        if kind == _MAP:
+            if self.key_ is _NO_KEY:
+                self.key_ = value
+                return self, False
+            key = self.key_
+            self.key_ = _NO_KEY
+            try:
+                self.items_[key] = value
+            except TypeError as e:
+                raise PyCodecError(
+                    "Map key of type %s is not hashable" % type(key).__name__
+                ) from e
+            self.remaining_ -= 1
+            return (self, False) if self.remaining_ else (self.items_, False)
+        if kind == _LIST_TAIL:
+            if not self.items_:
+                # A zero-length list is its tail, already hooked:
+                # <<108,0,0,0,0,97,42>> is 42 (binary_SUITE:robustness).
+                return value, True
+            return ImproperList(self.items_, value), False
+        self.items_.append(value)
+        self.remaining_ -= 1
+        if self.remaining_:
+            return self, False
+        if kind == _LIST:
+            return self._list_end(reader)
+        if kind == _TUPLE:
+            return tuple(self.items_), False
+        assert self.fun_ is not None  # kind == _FUN
+        arity, uniq, index = self.fun_
+        mod, old_index, old_uniq, pid = self.items_[:4]
+        fun = Fun(
+            mod=mod,
+            arity=arity,
+            pid=pid,
+            index=index,
+            uniq=uniq,
+            old_index=old_index,
+            old_uniq=old_uniq,
+            free=self.items_[4:],
+        )
+        return fun, False
 
 
-def _decode_fun(dec: _Decoder, reader: _Reader) -> Fun:
-    reader.u32()  # Size: OTP ignores it too (TERM-05)
-    arity = reader.u8()
-    uniq = reader.read(16)
-    index = reader.u32()
-    num_free = reader.u32()
-    mod = dec.decode(reader)
-    old_index = dec.decode(reader)
-    old_uniq = dec.decode(reader)
-    pid = dec.decode(reader)
-    free_vars = [dec.decode(reader) for _ in range(num_free)]
-    return Fun(
-        mod=mod,
-        arity=arity,
-        pid=pid,
-        index=index,
-        uniq=uniq,
-        old_index=old_index,
-        old_uniq=old_uniq,
-        free=free_vars,
-    )
+def _count(reader: _Reader, count: int, per_element: int, what: str) -> int:
+    """``count`` if the input can hold that many elements of at least
+    ``per_element`` bytes each; checked before anything is allocated."""
+    if count * per_element > reader.remaining():
+        raise PyCodecError(
+            "%s declares %d elements but only %d bytes remain"
+            % (what, count, reader.remaining())
+        )
+    return count
 
 
-def _decode_term(dec: _Decoder, reader: _Reader) -> Any:
-    """Decode one term with the options in ``dec``; nested terms go through
-    ``dec.decode``."""
+def _start_term(dec: _Decoder, reader: _Reader) -> Any:
+    """Read the next term: its value, or a ``_Frame`` for a compound term
+    whose children follow."""
     tag = reader.u8()
 
     if tag in _ATOM_TAGS:
@@ -450,15 +569,18 @@ def _decode_term(dec: _Decoder, reader: _Reader) -> Any:
         return dec.create_str_(reader.read(reader.u16()))
 
     if tag == TAG_LIST_EXT:
-        return _decode_list(dec, reader)
+        # The elements and then the tail, at least one byte each.
+        return _Frame(_LIST, _count(reader, reader.u32(), 1, "LIST_EXT"), [])
 
     if tag == TAG_SMALL_TUPLE_EXT:
-        arity = reader.u8()
-        return tuple([dec.decode(reader) for _ in range(arity)])
+        return _Frame(_TUPLE, _count(reader, reader.u8(), 1, "SMALL_TUPLE_EXT"), [])
 
     if tag == TAG_LARGE_TUPLE_EXT:
-        arity = reader.u32()
-        return tuple([dec.decode(reader) for _ in range(arity)])
+        return _Frame(_TUPLE, _count(reader, reader.u32(), 1, "LARGE_TUPLE_EXT"), [])
+
+    if tag == TAG_MAP_EXT:
+        pairs = _count(reader, reader.u32(), 2, "MAP_EXT")
+        return _Frame(_MAP, pairs, {})
 
     if tag == TAG_SMALL_INT:
         return reader.u8()
@@ -496,9 +618,6 @@ def _decode_term(dec: _Decoder, reader: _Reader) -> Any:
             node_name=node, creation=creation, refid=reader.read(4 * words)
         )
 
-    if tag == TAG_MAP_EXT:
-        return _decode_map(dec, reader)
-
     if tag == TAG_BINARY_EXT:
         # Returned as Python `bytes`
         return reader.read(reader.u32())
@@ -524,7 +643,13 @@ def _decode_term(dec: _Decoder, reader: _Reader) -> Any:
         return -result if sign != 0 else result
 
     if tag == TAG_NEW_FUN_EXT:
-        return _decode_fun(dec, reader)
+        reader.u32()  # Size: OTP ignores it too (TERM-05)
+        arity = reader.u8()
+        uniq = reader.read(16)
+        index = reader.u32()
+        num_free = _count(reader, reader.u32(), 1, "NEW_FUN_EXT")
+        # Module, OldIndex, OldUniq and Pid come before the free variables.
+        return _Frame(_FUN, 4 + num_free, [], (arity, uniq, index))
 
     raise PyCodecError("Unknown tag %d" % tag)
 

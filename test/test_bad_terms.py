@@ -13,7 +13,9 @@ Inputs:
   ``binary_to_term`` and expect to fail (``binary_SUITE``: ``bad_terms``,
   ``more_bad_terms``, ``bad_binary_to_term``, ``bad_binary_to_term_2``,
   ``otp_5484``, ``otp_5933``, ``otp_6817``, ``otp_8117``, ``otp_8180``;
-  ``node_container_SUITE:bad_nc``). Each must be rejected.
+  ``node_container_SUITE:bad_nc``), and ``limits.*`` (plan step TERM-09:
+  counts larger than the input, broken compressed terms). Each must be
+  rejected.
 - Every fixture of both OTP-written sets (TERM-03, TERM-04), broken by the
   generators of ``etf_mutations.py``: truncated (must be rejected), a length
   field maxed out (must be rejected), and single bytes corrupted as OTP's
@@ -41,6 +43,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import zlib
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -315,6 +318,32 @@ def _otp_8117() -> Iterator[BadVector]:
         )
 
 
+def _limits() -> Iterator[BadVector]:
+    # Plan step TERM-09: counts the input cannot hold, and compressed terms
+    # whose zlib stream disagrees with the declared size or is cut off.
+    yield BadVector(
+        "tuple_arity_2p31", bytes([131, 105]) + _u32(1 << 31) + bytes([97, 1])
+    )
+    yield BadVector(
+        "list_len_max_10_bytes",
+        bytes([131, 108]) + _u32(0xFFFFFFFF) + bytes([97, 1] * 5),
+    )
+    yield BadVector(
+        "map_size_max", bytes([131, 116]) + _u32(0xFFFFFFFF) + bytes([97, 1])
+    )
+    data = bytes([108]) + _u32(100) + bytes([97, 1] * 100) + bytes([106])
+    packed = zlib.compress(data)
+    yield BadVector(
+        "compressed_declared_smaller", bytes([131, 80]) + _u32(len(data) - 1) + packed
+    )
+    yield BadVector(
+        "compressed_declared_larger", bytes([131, 80]) + _u32(len(data) + 1) + packed
+    )
+    yield BadVector(
+        "compressed_no_checksum", bytes([131, 80]) + _u32(len(data)) + packed[:-4]
+    )
+
+
 def _otp_8180() -> Iterator[BadVector]:
     # From binary_SUITE:otp_8180 (binary_SUITE_data/zzz.terms.*)
     for path in sorted(BAD_DIR.glob("binary_SUITE.otp_8180.*.etf")):
@@ -333,6 +362,7 @@ def _all_bad_vectors() -> list[BadVector]:
         "binary_SUITE.otp_8117": _otp_8117,
         "binary_SUITE.otp_8180": _otp_8180,
         "node_container_SUITE.bad_nc": _bad_nc,
+        "limits": _limits,
     }
     return [
         BadVector("%s.%s" % (origin, v.name), v.data)
@@ -561,15 +591,7 @@ def test_walker_reads_every_fixture() -> None:
 # when it is done; strict xfails show any line that is wrong.
 
 # (generator, codec id) -> plan steps, for test_broken_fixtures.
-MUTATIONS_BLOCKED: dict[tuple[str, str], str] = {
-    # Both: a compressed term whose zlib checksum is cut off still decodes.
-    ("truncate", "py"): "TERM-09",
-    ("truncate", "native"): "TERM-09",
-    # Vec::with_capacity / vec![0; n] from the length field: the process
-    # aborts ("memory allocation of 34359738360 bytes failed").
-    ("length", "native"): "TERM-09",
-    ("flip", "native"): "TERM-09",
-}
+MUTATIONS_BLOCKED: dict[tuple[str, str], str] = {}
 
 
 def _vector_blocks() -> tuple[dict[str, str], dict[tuple[str, str], str]]:
@@ -589,12 +611,6 @@ def _vector_blocks() -> tuple[dict[str, str], dict[tuple[str, str], str]]:
     both[b + "otp_5484.pid_bad_values"] = "TERM-11"
     for n in ("ref_first_word_2p18", "ref_7_words", "pid_creation_4", "ref_creation_4"):
         both["node_container_SUITE.bad_nc." + n] = "TERM-11"
-    for bit in range(32):
-        for what in ("list_len", "tuple_arity"):
-            # Native pre-allocates 2^31.. elements and aborts.
-            by[(b + "otp_8117.%s_neg_2p%d" % (what, bit), "native")] = "TERM-09"
-    for n in ("1197", "2224", "24619", "25681", "26563", "26744", "527"):
-        by[(b + "otp_8180.zzz.terms." + n, "native")] = "TERM-09"
     return both, by
 
 

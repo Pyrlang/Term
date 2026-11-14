@@ -36,3 +36,14 @@
   latter names the key's type.
 - `ImproperList(elements, tail)` keeps a falsy tail (`0`, `None`, `""`);
   `[1|0]` and `[1|undefined]` decoded as lists with the wrong tail.
+- Resource limits on decoding, the same in both codecs. Decoding is
+  iterative, so deep nesting no longer overflows the native stack (the
+  native codec crashed the interpreter below 1000 levels in a debug build)
+  or hits Python's recursion limit (about 350 levels). New options:
+  `max_depth` (default 4096 nested compound terms) and `max_size` (default
+  256 MiB, the most a compressed term may declare). Counts in the input are
+  checked against the bytes that remain before anything is allocated (the
+  native codec aborted on a list or tuple claiming 2^31 elements). A
+  compressed term is inflated incrementally and only up to its declared
+  size, and its zlib stream must be complete: a cut-off checksum used to be
+  accepted.

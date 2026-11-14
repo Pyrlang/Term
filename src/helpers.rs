@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyString};
+use pyo3::types::{PyDict, PyInt, PyString};
 
 use super::errors::{CodecError, CodecResult};
 
@@ -35,6 +35,32 @@ pub fn maybe_dict<'py>(dict_or_none: &Bound<'py, PyAny>) -> CodecResult<Bound<'p
         Ok(PyDict::new(dict_or_none.py()))
     } else {
         Ok(dict_or_none.cast::<PyDict>()?.clone())
+    }
+}
+
+/// Get dict value with string key, expect a positive int (a size or a
+/// limit), or return the default value.
+pub fn get_positive_int_opt(
+    opts: &Bound<'_, PyDict>,
+    optname: &str,
+    default: usize,
+) -> CodecResult<usize> {
+    let Some(val) = opts.get_item(optname)? else {
+        return Ok(default);
+    };
+    // bool is an int subclass in Python, but not a size
+    if !val.is_exact_instance_of::<PyInt>() {
+        return Err(bad_positive_int(optname, &val));
+    }
+    match val.extract::<usize>() {
+        Ok(n) if n > 0 => Ok(n),
+        _ => Err(bad_positive_int(optname, &val)),
+    }
+}
+
+fn bad_positive_int(optname: &str, val: &Bound<'_, PyAny>) -> CodecError {
+    CodecError::BadOptions {
+        txt: format!("'{}' option is {}; expected a positive int", optname, val),
     }
 }
 
