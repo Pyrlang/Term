@@ -28,7 +28,7 @@ class Reference(BaseRef):
     """
 
     @staticmethod
-    def create(node_name: str, creation: int):
+    def create(node_name: str, creation: int) -> "Reference":
         """Construct a (most possibly) unique ref with random bytes and time
         :param node_name: string, not a Node object
         :param creation: int value 0, 1 or 2 from node's distribution object
@@ -67,7 +67,7 @@ class Reference(BaseRef):
 
     # Eq, Ne and Hash are used for having this class as a dict key
 
-    def equals(self, other) -> bool:
+    def equals(self, other: object) -> bool:
         return (
             isinstance(other, Reference)
             and self.node_name_ == other.node_name_
@@ -77,8 +77,8 @@ class Reference(BaseRef):
 
     __eq__ = equals
 
-    def __ne__(self, other):
+    def __ne__(self, other: object) -> bool:
         return not self.equals(other)
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((REF_MARKER, self.node_name_, self.id_, self.creation_))

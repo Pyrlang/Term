@@ -6,6 +6,6 @@ class BitString(BaseTerm):
     incomplete last byte) back to Erlang/Elixir node.
     """
 
-    def __init__(self, val: bytes, last_byte_bits: int):
+    def __init__(self, val: bytes, last_byte_bits: int) -> None:
         self.last_byte_bits_ = last_byte_bits
         self.value_ = val

@@ -15,36 +15,36 @@
 import struct
 
 
-def u16(data: bytes, pos: int = 0):
+def u16(data: bytes, pos: int = 0) -> int:
     return struct.unpack(">H", data[pos : pos + 2])[0]
 
 
-def u32(data: bytes, pos: int = 0):
+def u32(data: bytes, pos: int = 0) -> int:
     return struct.unpack(">I", data[pos : pos + 4])[0]
 
 
-def i32(data: bytes, pos: int = 0):
+def i32(data: bytes, pos: int = 0) -> int:
     return struct.unpack(">i", data[pos : pos + 4])[0]
 
 
-def to_u32(val):
+def to_u32(val: int) -> bytes:
     return struct.pack(">I", val)
 
 
-def to_i32(val):
+def to_i32(val: int) -> bytes:
     return struct.pack(">i", val)
 
 
-def to_u16(val):
+def to_u16(val: int) -> bytes:
     return struct.pack(">H", val)
 
 
-def hex_bytes(data: bytes, sep: str = " "):
+def hex_bytes(data: bytes, sep: str = " ") -> str:
     """Format a bytes() object as a hex dump"""
     return sep.join("{:02x}".format(bval) for bval in data)
 
 
-def dec_bytes(data: bytes, sep: str = " "):
+def dec_bytes(data: bytes, sep: str = " ") -> str:
     """Format a bytes() object as a decimal dump"""
     return sep.join(str(bval) for bval in data)
 

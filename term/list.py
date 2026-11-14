@@ -13,11 +13,11 @@
 # limitations under the License.
 
 import array
-from typing import List
+from typing import Any, List
 
 from term.basetypes import BaseTerm
 
-NIL = []  # type: List
+NIL: List[Any] = []
 
 
 class ImproperList(List, BaseTerm):
@@ -27,7 +27,7 @@ class ImproperList(List, BaseTerm):
     and very likely you will not ever need it.
     """
 
-    def __init__(self, elements: list, tail=None):
+    def __init__(self, elements: list[Any], tail: Any = None) -> None:
         """tail is optional, if omitted, the last element in elements
         `elements[-1]` will be considered to be the tail. if it's
         present it will be appended to the list so it becomes `self[-1]`
@@ -37,15 +37,15 @@ class ImproperList(List, BaseTerm):
             self.append(tail)
 
     @property
-    def _elements(self):
+    def _elements(self) -> list[Any]:
         return self[:-1]
 
     @property
-    def _tail(self):
+    def _tail(self) -> Any:
         return self[-1]
 
 
-def list_to_unicode_str(lst: list) -> str:
+def list_to_unicode_str(lst: list[int]) -> str:
     """A helper function to convert a list of large integers incoming from
     Erlang into a unicode string."""
     return "".join(map(chr, lst))

@@ -11,9 +11,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from typing import Protocol
+
 from term.basetypes import BasePid
 
 PID_MARKER = "pyrlang.Pid"
+
+
+class _NamedNode(Protocol):
+    """Anything with a node name, such as ``pyrlang.node.Node``."""
+
+    @property
+    def node_name_(self) -> str: ...
 
 
 class Pid(BasePid):
@@ -34,7 +43,7 @@ class Pid(BasePid):
         self.serial_ = serial
         self.creation_ = creation
 
-    def is_local_to(self, node):
+    def is_local_to(self, node: _NamedNode) -> bool:
         """Compares self.node_name to other node.node_name
         :param node: Check whether pid is local to the node.
         :type node: pyrlang.node.Node
@@ -52,7 +61,7 @@ class Pid(BasePid):
     def __str__(self) -> str:
         return self.__repr__()
 
-    def equals(self, other) -> bool:
+    def equals(self, other: object) -> bool:
         return (
             isinstance(other, Pid)
             and self.node_name_ == other.node_name_
@@ -63,10 +72,10 @@ class Pid(BasePid):
 
     __eq__ = equals
 
-    def __ne__(self, other):
+    def __ne__(self, other: object) -> bool:
         return not self.equals(other)
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash(
             (PID_MARKER, self.node_name_, self.id_, self.serial_, self.creation_)
         )

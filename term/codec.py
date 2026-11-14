@@ -4,11 +4,16 @@ but always works.
 """
 
 import logging
+from types import ModuleType
+from typing import Any, Callable, Optional
 
 from term.basetypes import BaseTerm, Term
 
 LOG = logging.getLogger("term")
 
+# Either implementation; their function signatures differ slightly (see
+# native_codec_impl.pyi), so the common type is the plain module.
+co_impl: ModuleType
 try:
     import term.native_codec_impl as co_impl
 except ImportError:
@@ -18,7 +23,14 @@ except ImportError:
     import term.py_codec_impl as co_impl
 
 
-def binary_to_term(data: bytes, options=None, decode_hook=None) -> tuple[Term, bytes]:
+# Options and hooks carry arbitrary user values and callables, hence Any.
+_Options = Optional[dict[str, Any]]
+_Hooks = Optional[dict[str, Callable[[Any], Any]]]
+
+
+def binary_to_term(
+    data: bytes, options: _Options = None, decode_hook: _Hooks = None
+) -> tuple[Term, bytes]:
     """
     Strip 131 header and unpack if the data was compressed.
 
@@ -44,7 +56,9 @@ def binary_to_term(data: bytes, options=None, decode_hook=None) -> tuple[Term, b
     return co_impl.binary_to_term(data, opt)
 
 
-def term_to_binary(term: object, options=None, encode_hook=None):
+def term_to_binary(
+    term: object, options: _Options = None, encode_hook: _Hooks = None
+) -> bytes:
     """
     Prepend the 131 header byte to encoded data.
     :param options: None or a dict of options with key/values "encode_hook": f where f

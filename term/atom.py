@@ -24,7 +24,7 @@ class Atom(str, BaseTerm):
         {Atom('foo'): 1, 'foo': 2} == {'foo': 2}
     """
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         the_repr = super(Atom, self).__repr__()
         return f"Atom({the_repr})"
 
@@ -47,8 +47,8 @@ class StrictAtom(Atom):
         the_repr = super(StrictAtom, self).__repr__()
         return f"Strict{the_repr}"
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.__repr__()
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((ATOM_MARKER, super(StrictAtom, self).__hash__()))

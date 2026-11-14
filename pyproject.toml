@@ -38,6 +38,31 @@ dev = [
 [project.urls]
 Homepage = "https://github.com/Pyrlang/Term/"
 
+[tool.setuptools.package-data]
+# PEP 561: ship the type marker and the stub for the native module.
+term = ["py.typed", "*.pyi"]
+
+[tool.black]
+# The planned Python floor (decision 2 in .agents/00-plan.md); TERM-02 raises
+# requires-python to match.
+target-version = ["py311"]
+extend-exclude = "^/docs/"
+
+[tool.isort]
+profile = "black"
+extend_skip = ["docs"]
+
+[tool.mypy]
+python_version = "3.11"
+packages = ["term"]
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+
 [tool.bumpver.file_patterns]
 "pyproject.toml" = [
     'current_version = "{version}"',
