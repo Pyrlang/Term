@@ -892,12 +892,24 @@ def test_encode_binary(codec: ModuleType) -> None:
     b1 = codec.term_to_binary(waagh, None)
     assert b1 == example1
 
+    # Only the high 4 bits of "h" (0x68) count; OTP writes the rest as zero.
     example2 = (
         bytes([py_impl.ETF_VERSION_TAG, py_impl.TAG_BIT_BINARY_EXT, 0, 0, 0, 5, 4])
-        + waagh
+        + b"Waag\x60"
     )
     b2 = codec.term_to_binary(BitString(val=waagh, last_byte_bits=4), None)
     assert b2 == example2
+
+
+def test_encode_bitstring_edges(codec: ModuleType) -> None:
+    """8 bits in the last byte make a binary; a bitstring needs 1..8 bits and
+    a byte to hold them (TERM-20)."""
+    assert codec.term_to_binary(BitString(b"\x05", 8), None) == bytes(
+        [131, 109, 0, 0, 0, 1, 5]
+    )
+    for bad in (BitString(b"", 3), BitString(b"\x05", 0), BitString(b"\x05", 9)):
+        with pytest.raises(codec.PyCodecError):
+            codec.term_to_binary(bad, None)
 
 
 def test_encode_special(codec: ModuleType) -> None:

@@ -196,6 +196,18 @@ class _Decoder:
             raise PyCodecError("Option 'decode_hook' must be a dict")
         # Hook functions are user code taking and returning any value.
         self.decode_hook_: dict[str, Callable[[Any], Any]] = hooks or {}
+        bitstring = options.get("bitstring", "tuple")
+        if bitstring not in ("tuple", "BitString"):
+            raise PyCodecError(
+                "Option 'bitstring' is %r; expected 'tuple', 'BitString'" % (bitstring,)
+            )
+        self.bitstring_as_tuple_ = bitstring == "tuple"
+
+    def bitstring(self, value: bytes, bits: int) -> Any:
+        """A bitstring as the options ask: ``(bytes, bits)`` or ``BitString``."""
+        if self.bitstring_as_tuple_:
+            return (value, bits)
+        return BitString(value, bits)
 
     def atom(self, name: bytes, tag: int) -> Any:
         """An atom as the options ask; true, false, undefined become Python
@@ -253,7 +265,8 @@ def binary_to_term_2(data: bytes, options: OptionsType = None) -> tuple[Term, by
     Refs decoded to and :py:class:`~Term.reference.Reference`.
     Maps are decoded into Python ``dict``.
     Binaries are decoded into ``bytes``
-    object and bitstrings into a pair of ``(bytes, last_byte_bits:int)``.
+    object and bitstrings into a pair of ``(bytes, last_byte_bits:int)``
+    or a ``BitString`` (option "bitstring").
 
     :param options: dict(str, _);
             * "atom": "str" | "bytes" | "Atom" | "StrictAtom"; default "Atom".
@@ -263,6 +276,10 @@ def binary_to_term_2(data: bytes, options: OptionsType = None) -> tuple[Term, by
               precedence over "atom"
             * "byte_string": "str" | "bytes" | "int_list" (default "str").
               Returns 8-bit strings as Python str or bytes or int list.
+            * "bitstring": "tuple" | "BitString" (default "tuple"). Returns
+              bitstrings as ``(bytes, last_byte_bits)`` or as
+              :py:class:`~term.bitstring.BitString`, which encodes back to a
+              bitstring.
             * "decode_hook": dict of type name -> callable, called for every
               decoded value (nested ones too) whose type has that name.
               Options and hooks apply at every nesting level; node names of
@@ -449,13 +466,17 @@ def _decode_term(dec: _Decoder, data: bytes) -> tuple[Any, bytes]:
         len_data = len(data)
         if len_data < 6:
             return incomplete_data("decoding length for a bit-binary")
-        len_expected = util.u32(data, 1) + 6
-        lbb = data[5]
+        size = util.u32(data, 1)
+        len_expected = size + 6
+        bits = data[5]
+        _check_bits(size, bits)
         if len_expected > len_data:
             return incomplete_data("decoding data for a bit-binary")
-
-        # Returned as tuple `(bytes, last_byte_bits:int)`
-        return (data[6:len_expected], lbb), data[len_expected:]
+        value = data[6:len_expected]
+        if bits == 8:
+            # A whole last byte: the term is a binary (as OTP decodes it).
+            return value, data[len_expected:]
+        return dec.bitstring(_mask_last_byte(value, bits), bits), data[len_expected:]
 
     if tag == TAG_NEW_FLOAT_EXT:
         (result_f,) = struct.unpack(">d", data[1:9])
@@ -694,15 +715,31 @@ def _pack_float(val: float) -> bytes:
     return bytes([TAG_NEW_FLOAT_EXT]) + struct.pack(">d", val)
 
 
+def _check_bits(size: int, bits: int) -> None:
+    """``BIT_BINARY_EXT`` carries 1..8 bits in its last byte, so it has a
+    last byte (binary_SUITE:bad_terms, bad_binary_to_term)."""
+    if not 1 <= bits <= 8:
+        raise PyCodecError("Bitstring: %d bits in the last byte, expected 1..8" % bits)
+    if size == 0:
+        raise PyCodecError("Bitstring: no bytes to hold %d bits" % bits)
+
+
+def _mask_last_byte(value: bytes, bits: int) -> bytes:
+    """Clear the unused low bits of the last byte, as OTP does."""
+    last = value[-1] & (0xFF << (8 - bits)) & 0xFF
+    return value[:-1] + bytes([last])
+
+
 def _pack_binary(data: bytes, last_byte_bits: int) -> bytes:
     if last_byte_bits == 8:
         return bytes([TAG_BINARY_EXT]) + util.to_u32(len(data)) + data
 
+    _check_bits(len(data), last_byte_bits)
     return (
         bytes([TAG_BIT_BINARY_EXT])
         + util.to_u32(len(data))
         + bytes([last_byte_bits])
-        + data
+        + _mask_last_byte(data, last_byte_bits)
     )
 
 

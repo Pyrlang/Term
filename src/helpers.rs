@@ -88,6 +88,47 @@ pub fn get_byte_str_opt(opts1: &Bound<'_, PyDict>) -> CodecResult<ByteStringRepr
     }
 }
 
+// The "bitstring" decode option: what a BIT_BINARY_EXT becomes in Python.
+#[derive(Eq, PartialEq, Copy, Clone)]
+pub enum BitstringRepresentation {
+    Tuple,
+    BitString,
+}
+
+/// Option: "bitstring" => "tuple" (default) | "BitString"
+pub fn get_bitstring_opt(opts1: &Bound<'_, PyDict>) -> CodecResult<BitstringRepresentation> {
+    let opt_s = get_str_opt(opts1, "bitstring", "tuple")?;
+    match opt_s.as_ref() {
+        "tuple" => Ok(BitstringRepresentation::Tuple),
+        "BitString" => Ok(BitstringRepresentation::BitString),
+        other => Err(CodecError::BadOptions {
+            txt: format!(
+                "'bitstring' option is '{}' while expected: tuple, BitString",
+                other
+            ),
+        }),
+    }
+}
+
+/// BIT_BINARY_EXT carries 1..8 bits in its last byte, so it has a last byte
+/// (binary_SUITE:bad_terms, bad_binary_to_term).
+pub fn check_bits(size: usize, bits: u8) -> CodecResult<()> {
+    if !(1..=8).contains(&bits) || size == 0 {
+        return Err(CodecError::BadBitstring { size, bits });
+    }
+    Ok(())
+}
+
+/// Copy of a bitstring's bytes with the unused low bits of the last byte
+/// cleared, as OTP does. `bits` is 1..8 (see `check_bits`).
+pub fn mask_last_byte(value: &[u8], bits: u8) -> Vec<u8> {
+    let mut out = value.to_vec();
+    if let Some(last) = out.last_mut() {
+        *last &= 0xFFu8.checked_shl(u32::from(8 - bits)).unwrap_or(0);
+    }
+    out
+}
+
 pub trait VecWriteExt {
     fn push_u32(&mut self, value: u32);
     fn push_i32(&mut self, value: i32);
@@ -110,5 +151,27 @@ impl VecWriteExt for Vec<u8> {
 
     fn push_f64(&mut self, value: f64) {
         self.extend(value.to_be_bytes());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{check_bits, mask_last_byte};
+
+    #[test]
+    fn mask_clears_unused_low_bits() {
+        assert_eq!(mask_last_byte(&[0xFF, 0xFF], 1), [0xFF, 0x80]);
+        assert_eq!(mask_last_byte(&[0xFF], 7), [0xFE]);
+        assert_eq!(mask_last_byte(&[0xFF], 8), [0xFF]);
+        assert_eq!(mask_last_byte(&[], 3), [0u8; 0]);
+    }
+
+    #[test]
+    fn bits_must_be_1_to_8_with_a_byte() {
+        assert!(check_bits(1, 1).is_ok());
+        assert!(check_bits(1, 8).is_ok());
+        assert!(check_bits(1, 0).is_err());
+        assert!(check_bits(1, 9).is_err());
+        assert!(check_bits(0, 1).is_err());
     }
 }

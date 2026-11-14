@@ -384,18 +384,28 @@ impl<'py> Encoder<'py> {
         Ok(())
     }
 
-    /// Encode a Binary bit-string (last byte has less than 8 bits)
+    /// Encode a BitString: BIT_BINARY_EXT with the unused low bits of the
+    /// last byte cleared; a whole last byte (8 bits) is a plain binary.
     #[inline]
     fn write_bitstring(&mut self, py_bits: &Bound<'py, PyAny>) -> CodecResult<()> {
         let py_value = py_bits.getattr("value_")?;
         let data: &[u8] = py_value.cast::<PyBytes>()?.as_bytes();
-
         let last_byte_bits: u8 = py_bits.getattr("last_byte_bits_")?.extract()?;
+        let size =
+            u32::try_from(data.len()).map_err(|_| CodecError::TooLong { size: data.len() })?;
 
+        if last_byte_bits == 8 {
+            self.data.push(consts::TAG_BINARY_EXT);
+            self.data.push_u32(size);
+            self.data.extend_from_slice(data);
+            return Ok(());
+        }
+        helpers::check_bits(data.len(), last_byte_bits)?;
         self.data.push(consts::TAG_BIT_BINARY_EXT);
-        self.data.push_u32(data.len() as u32);
+        self.data.push_u32(size);
         self.data.push(last_byte_bits);
-        self.data.extend_from_slice(data);
+        self.data
+            .extend(helpers::mask_last_byte(data, last_byte_bits));
         Ok(())
     }
 } // end impl

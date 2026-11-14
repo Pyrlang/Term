@@ -580,10 +580,6 @@ def _vector_blocks() -> tuple[dict[str, str], dict[tuple[str, str], str]]:
     both: dict[str, str] = {}
     by: dict[tuple[str, str], str] = {}
     b = "binary_SUITE."
-    # Bits must be 1..8, and 0 bytes carry no bits.
-    for n in ("bad_terms.bits_0", "bad_terms.bits_9", "bad_terms.bits_1_of_0_bytes"):
-        both[b + n] = "TERM-20"
-    both[b + "bad_binary_to_term.bits_0_of_0_bytes"] = "TERM-20"
     # NEW_FLOAT_EXT must be finite.
     both[b + "bad_binary_to_term.float_nan"] = "TERM-14"
     # Atoms have at most 255 characters.

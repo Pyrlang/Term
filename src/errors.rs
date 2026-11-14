@@ -39,6 +39,13 @@ pub enum CodecError {
     NodeNotAnAtom { b: u8 },
     #[error("Bad options passed: {}", txt)]
     BadOptions { txt: String },
+    // A bitstring whose last byte would hold 0 or more than 8 bits.
+    #[error(
+        "Bitstring of {} bytes with {} bits in the last byte (expected 1..8 bits, 1 or more bytes)",
+        size,
+        bits
+    )]
+    BadBitstring { size: usize, bits: u8 },
     // More magnitude bytes than LARGE_BIG_EXT's 32-bit count can declare.
     #[error("Integer is too large for LARGE_BIG_EXT")]
     IntegerTooLarge,

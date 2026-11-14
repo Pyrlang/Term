@@ -73,8 +73,13 @@ def _codecs() -> list[ModuleType]:
         return [py_codec_impl]
 
 
+# Decode options under which every value encodes back to the same term:
+# bitstrings as BitString (the default tuple would go out as a tuple).
+DECODE_OPTIONS = {"bitstring": "BitString"}
+
+
 def _reencode(codec: ModuleType, vector: Vector) -> bytes:
-    value, tail = codec.binary_to_term(vector.path.read_bytes(), None)
+    value, tail = codec.binary_to_term(vector.path.read_bytes(), DECODE_OPTIONS)
     assert tail == b""
     encoded: bytes = codec.term_to_binary(value, None)
     return encoded

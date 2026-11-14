@@ -274,3 +274,24 @@ def test_encode_fixture(
 def test_encode_also(name: str, codec: ModuleType) -> None:
     expected = (FIXTURE_DIR / (name + ".etf")).read_bytes()
     assert codec.term_to_binary(ENCODE_ALSO[name], None) == expected
+
+
+# The bitstring fixtures and their value as BitString (TERM-20).
+BITSTRINGS = {
+    name: ENCODE_FROM[name] for name in ("bits_1_1", "bits_5_7", "bits_1_2_3_4")
+}
+
+
+@pytest.mark.parametrize("option", ["tuple", "BitString"])
+@pytest.mark.parametrize("name", list(BITSTRINGS))
+def test_decode_bitstring_option(name: str, option: str, codec: ModuleType) -> None:
+    """Option "bitstring" picks the representation; BitString encodes back
+    to OTP's bytes."""
+    data = (FIXTURE_DIR / (name + ".etf")).read_bytes()
+    value, tail = codec.binary_to_term(data, {"bitstring": option})
+    assert tail == b""
+    if option == "tuple":
+        _assert_same(value, EXPECTED[name])
+    else:
+        _assert_same(value, BITSTRINGS[name])
+        assert codec.term_to_binary(value, None) == data

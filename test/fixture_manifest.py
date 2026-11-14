@@ -38,8 +38,6 @@ DECODE_BLOCKED_BY: dict[tuple[str, str], str] = {}
 # decode -> encode (in addition to everything that does not decode).
 ROUNDTRIP_BLOCKED: dict[str, str] = {
     "local_fun": "TERM-13",
-    # Bitstrings decode to a (bytes, bits) tuple, which encodes as a tuple.
-    "bitstring": "TERM-20",
 }
 
 ROUNDTRIP_BLOCKED_BY: dict[tuple[str, str], str] = {}

@@ -9,6 +9,7 @@ import pytest
 
 from term import py_codec_impl as py_impl
 from term.atom import Atom, StrictAtom
+from term.bitstring import BitString
 from term.fun import Fun
 from term.list import ImproperList, list_to_unicode_str
 from term.pid import Pid
@@ -1227,6 +1228,20 @@ def test_decode_hook(codec: ModuleType) -> None:
     )
     assert negative_val == -4747
     _assert_expected_tail(tail)
+
+
+def test_decode_bitstring_edges(codec: ModuleType) -> None:
+    """What OTP 29's binary_to_term makes of these (TERM-20): 8 bits in the
+    last byte is the binary <<5>>; unused low bits are cleared: <<1:1>>."""
+    whole = bytes([131, 77, 0, 0, 0, 1, 8, 5])
+    assert codec.binary_to_term(whole, {"bitstring": "BitString"}) == (b"\x05", b"")
+    assert codec.binary_to_term(whole, None) == (b"\x05", b"")
+    dirty = bytes([131, 77, 0, 0, 0, 1, 1, 255])
+    value, _tail = codec.binary_to_term(dirty, {"bitstring": "BitString"})
+    assert value == BitString(b"\x80", 1)
+    assert codec.binary_to_term(dirty, None) == ((b"\x80", 1), b"")
+    with pytest.raises(codec.PyCodecError):
+        codec.binary_to_term(dirty, {"bitstring": "bits"})
 
 
 # {a, [b, #{c => "d"}]} as term_to_binary writes it on OTP 29 (TERM-06).

@@ -25,12 +25,13 @@ use crate::reader::{Readable, Reader};
 use super::consts;
 use super::errors::{CodecError, CodecResult};
 use super::helpers;
-use super::helpers::{AtomRepresentation, ByteStringRepresentation};
+use super::helpers::{AtomRepresentation, BitstringRepresentation, ByteStringRepresentation};
 
 pub struct Decoder<'py> {
     py: Python<'py>, // Python instance will live at least as long as Decoder
     atom_representation: AtomRepresentation,
     bytestring_repr: ByteStringRepresentation,
+    bitstring_repr: BitstringRepresentation,
 
     pub decode_hook: Bound<'py, PyDict>,
     // The "atom_call" option: builds every atom from its text when set.
@@ -42,6 +43,7 @@ pub struct Decoder<'py> {
     cached_ref_pyclass: Option<Bound<'py, PyAny>>,
     cached_fun_pyclass: Option<Bound<'py, PyAny>>,
     cached_improper_list_pyclass: Option<Bound<'py, PyAny>>,
+    cached_bitstring_pyclass: Option<Bound<'py, PyAny>>,
 }
 
 /// Return the cached Python class from `slot`, or import `module.name`, cache
@@ -76,6 +78,7 @@ impl<'py> Decoder<'py> {
             other => other,
         };
         let s8opt = helpers::get_byte_str_opt(&opts1)?;
+        let bitstring_repr = helpers::get_bitstring_opt(&opts1)?;
 
         let decode_hook = match opts1.get_item("decode_hook")? {
             Some(h1) if h1.is_none() => PyDict::new(py),
@@ -94,6 +97,7 @@ impl<'py> Decoder<'py> {
             py,
             atom_representation: aopt,
             bytestring_repr: s8opt,
+            bitstring_repr,
             decode_hook,
             atom_call,
             cached_atom_pyclass: None,
@@ -102,6 +106,7 @@ impl<'py> Decoder<'py> {
             cached_ref_pyclass: None,
             cached_fun_pyclass: None,
             cached_improper_list_pyclass: None,
+            cached_bitstring_pyclass: None,
         })
     }
 
@@ -286,15 +291,33 @@ impl<'py> Decoder<'py> {
     }
 
     /// Given input _after_ bit-string tag, parse remaining bytes and bit-count.
-    /// Returns the tuple (bytes, last_byte_bits); TERM-20 adds a BitString option.
+    /// A whole last byte (8 bits) makes a binary, as OTP decodes it. Otherwise
+    /// the "bitstring" option picks `(bytes, last_byte_bits)` or `BitString`.
     #[inline]
     fn parse_bitstring(&mut self, in_bytes: &mut Reader) -> CodecResult<Bound<'py, PyAny>> {
         let sz = in_bytes.read_u32()? as usize;
         let last_byte_bits: u8 = in_bytes.read_u8()?;
+        helpers::check_bits(sz, last_byte_bits)?;
         let bin = in_bytes.read(sz)?;
-        let py_bytes = PyBytes::new(self.py, bin).into_any();
+        if last_byte_bits == 8 {
+            return Ok(PyBytes::new(self.py, bin).into_any());
+        }
+        let py_bytes = PyBytes::new(self.py, &helpers::mask_last_byte(bin, last_byte_bits));
         let py_bits = last_byte_bits.into_bound_py_any(self.py)?;
-        Ok(PyTuple::new(self.py, [py_bytes, py_bits])?.into_any())
+        match self.bitstring_repr {
+            BitstringRepresentation::Tuple => {
+                Ok(PyTuple::new(self.py, [py_bytes.into_any(), py_bits])?.into_any())
+            }
+            BitstringRepresentation::BitString => {
+                let cls = cached_class(
+                    self.py,
+                    &mut self.cached_bitstring_pyclass,
+                    "term.bitstring",
+                    "BitString",
+                )?;
+                Ok(cls.call1((py_bytes, py_bits))?)
+            }
+        }
     }
 
     /// Given input _after_ string tag, parse remaining bytes: one character
