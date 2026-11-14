@@ -74,9 +74,9 @@ Pyrlang node with it.
 
 ### Python binding layer
 
-- The crate currently uses `rust-cpython` 0.7, which is unmaintained. Moving
-  to PyO3 is a plan step (`TERM-02`). Until it lands, do not add code that
-  deepens the `rust-cpython` dependency beyond what a step needs.
+- The crate uses PyO3 0.30 with the `abi3-py311` feature (limited API only)
+  and the `Bound<'py, T>` API. setuptools-rust ≥ 1.12 builds it; do not add
+  PyO3's deprecated `extension-module` feature to `Cargo.toml`.
 - Binding APIs change between releases. Read the documentation for the exact
   version pinned in `Cargo.toml` before using an API; do not write binding
   code from memory.

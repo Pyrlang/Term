@@ -1,5 +1,7 @@
 [build-system]
-requires = ["setuptools", "wheel", "setuptools-rust"]
+# setuptools-rust 1.12+ configures PyO3 0.30 for an extension module (the
+# `extension-module` cargo feature is deprecated).
+requires = ["setuptools", "wheel", "setuptools-rust>=1.12"]
 
 [tool.bumpver]
 current_version = "2023.1001-alpha"
@@ -27,7 +29,7 @@ classifiers = [
 keywords = ["erlang", "protocol", "encode", "decode", "etf", "term", "binary"]
 dependencies = [
 ]
-requires-python = ">=3.7"
+requires-python = ">=3.11"
 
 [project.optional-dependencies]
 dev = [
@@ -43,8 +45,7 @@ Homepage = "https://github.com/Pyrlang/Term/"
 term = ["py.typed", "*.pyi"]
 
 [tool.black]
-# The planned Python floor (decision 2 in .agents/00-plan.md); TERM-02 raises
-# requires-python to match.
+# Matches requires-python (decision 2 in .agents/00-plan.md).
 target-version = ["py311"]
 extend-exclude = "^/docs/"
 

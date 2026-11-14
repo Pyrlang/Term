@@ -1,0 +1,5 @@
+# This crate builds on stable Rust only (AGENTS.md); pin the channel so a
+# nightly default toolchain is not picked up.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]

@@ -12,29 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use cpython::{FromPyObject, PyDict, PyObject, PyString, Python};
+use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyString};
 
 use super::errors::{CodecError, CodecResult};
 
 /// Get dict value with string key, expect it to be string too, or return
 /// the default value.
-pub fn get_str_opt(py: Python, opts: &PyDict, optname: &str, default: &str) -> CodecResult<String> {
-    match opts.get_item(py, optname) {
+pub fn get_str_opt(opts: &Bound<'_, PyDict>, optname: &str, default: &str) -> CodecResult<String> {
+    match opts.get_item(optname)? {
         Some(val) => {
-            let py_str: PyString = PyString::extract(py, &val)?;
-            let s = py_str.to_string_lossy(py).into_owned();
-            Ok(s)
+            let py_str = val.cast::<PyString>()?;
+            Ok(py_str.to_string_lossy().into_owned())
         }
         None => Ok(default.to_string()),
     }
 }
 
 /// Given a dict or a possibly None, return dict
-pub fn maybe_dict(py: Python, dict_or_none: PyObject) -> PyDict {
-    if dict_or_none == py.None() {
-        PyDict::new(py)
+pub fn maybe_dict<'py>(dict_or_none: &Bound<'py, PyAny>) -> CodecResult<Bound<'py, PyDict>> {
+    if dict_or_none.is_none() {
+        Ok(PyDict::new(dict_or_none.py()))
     } else {
-        PyDict::extract(py, &dict_or_none).unwrap()
+        Ok(dict_or_none.cast::<PyDict>()?.clone())
     }
 }
 
@@ -54,8 +54,8 @@ pub enum ByteStringRepresentation {
 }
 
 /// Option: "atom" => "bytes" | "str" | "Atom" | "StrictAtom" (as Atom class, default)
-pub fn get_atom_opt(py: Python, opts1: &PyDict) -> CodecResult<AtomRepresentation> {
-    let opt_s = get_str_opt(py, opts1, "atom", "Atom")?;
+pub fn get_atom_opt(opts1: &Bound<'_, PyDict>) -> CodecResult<AtomRepresentation> {
+    let opt_s = get_str_opt(opts1, "atom", "Atom")?;
     match opt_s.as_ref() {
         "bytes" => Ok(AtomRepresentation::Bytes),
         "str" => Ok(AtomRepresentation::Str),
@@ -72,8 +72,8 @@ pub fn get_atom_opt(py: Python, opts1: &PyDict) -> CodecResult<AtomRepresentatio
 }
 
 /// Option: "byte_string" => "bytes" | "str" | "int_list" (default: str)
-pub fn get_byte_str_opt(py: Python, opts1: &PyDict) -> CodecResult<ByteStringRepresentation> {
-    let opt_s: String = get_str_opt(py, opts1, "byte_string", "str")?;
+pub fn get_byte_str_opt(opts1: &Bound<'_, PyDict>) -> CodecResult<ByteStringRepresentation> {
+    let opt_s: String = get_str_opt(opts1, "byte_string", "str")?;
     match opt_s.as_ref() {
         "bytes" => Ok(ByteStringRepresentation::Bytes),
         "str" => Ok(ByteStringRepresentation::Str),

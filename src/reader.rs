@@ -96,9 +96,13 @@ impl<'a> Reader<'a> {
 
 impl<'a> Read for Reader<'a> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let to_read = (self.data.len() - self.offset).min(buf.len());
-        let slice = self.read(to_read).unwrap();
-        buf.copy_from_slice(slice);
+        let to_read = self.rest().len().min(buf.len());
+        let slice = self
+            .read(to_read)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::UnexpectedEof, e))?;
+        if let Some(dst) = buf.get_mut(..to_read) {
+            dst.copy_from_slice(slice);
+        }
         Ok(to_read)
     }
 }
