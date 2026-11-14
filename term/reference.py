@@ -16,31 +16,27 @@ import struct
 import time
 from typing import Union
 
-from term import util, Atom
+from term import Atom, util
 from term.basetypes import BaseRef, Term
 
 REF_MARKER = "pyrlang.Ref"
 
 
 class Reference(BaseRef):
-    """ Represents a reference value from Erlang, typically it has 12 bytes of
-        unique data, but it might change.
+    """Represents a reference value from Erlang, typically it has 12 bytes of
+    unique data, but it might change.
     """
 
     @staticmethod
     def create(node_name: str, creation: int):
-        """ Construct a (most possibly) unique ref with random bytes and time
-            :param node_name: string, not a Node object
-            :param creation: int value 0, 1 or 2 from node's distribution object
-            :rtype: term.reference.Reference
+        """Construct a (most possibly) unique ref with random bytes and time
+        :param node_name: string, not a Node object
+        :param creation: int value 0, 1 or 2 from node's distribution object
+        :rtype: term.reference.Reference
         """
         rand_val = int(time.monotonic() * 1000000) + random.randrange(1000000)
-        rand_bytes = rand_val.to_bytes(length=12,
-                                       byteorder="big",
-                                       signed=False)
-        return Reference(node_name=node_name,
-                         creation=creation,
-                         refid=rand_bytes)
+        rand_bytes = rand_val.to_bytes(length=12, byteorder="big", signed=False)
+        return Reference(node_name=node_name, creation=creation, refid=rand_bytes)
 
     def __init__(self, node_name: Term, creation: int, refid: bytes) -> None:
         self.node_name_ = Atom.from_string_or_atom(node_name)
@@ -56,11 +52,15 @@ class Reference(BaseRef):
         # specified in docs and can be a different multiple of 4)
         if len(self.id_) == 12:
             v = struct.unpack(">III", self.id_)
-            return "Ref<%d,%d,%d,%d>@%s" % \
-                (self.creation_, v[0], v[1], v[2], self.node_name_)
+            return "Ref<%d,%d,%d,%d>@%s" % (
+                self.creation_,
+                v[0],
+                v[1],
+                v[2],
+                self.node_name_,
+            )
         else:
-            return "Ref<%d,%s>" % (self.creation_,
-                                   util.hex_bytes(self.id_, ","))
+            return "Ref<%d,%s>" % (self.creation_, util.hex_bytes(self.id_, ","))
 
     def __str__(self) -> str:
         return self.__repr__()
@@ -68,10 +68,12 @@ class Reference(BaseRef):
     # Eq, Ne and Hash are used for having this class as a dict key
 
     def equals(self, other) -> bool:
-        return isinstance(other, Reference) \
-            and self.node_name_ == other.node_name_ \
-            and self.id_ == other.id_ \
+        return (
+            isinstance(other, Reference)
+            and self.node_name_ == other.node_name_
+            and self.id_ == other.id_
             and self.creation_ == other.creation_
+        )
 
     __eq__ = equals
 

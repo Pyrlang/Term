@@ -17,17 +17,16 @@ PID_MARKER = "pyrlang.Pid"
 
 
 class Pid(BasePid):
-    """ Represents Erlang-style process identifier with 3 components. Node
-        component is always 0 for local node, otherwise it can take arbitrary
-        integer values.
+    """Represents Erlang-style process identifier with 3 components. Node
+    component is always 0 for local node, otherwise it can take arbitrary
+    integer values.
 
-        A pid is created by Erlang automatically. Pyrlang Process also generates
-        one when it is born to register itself in the process registry. Pid
-        uniquely identifies a running process in the cluster.
+    A pid is created by Erlang automatically. Pyrlang Process also generates
+    one when it is born to register itself in the process registry. Pid
+    uniquely identifies a running process in the cluster.
     """
 
-    def __init__(self, node_name: str, id: int, serial: int,
-                 creation: int) -> None:
+    def __init__(self, node_name: str, id: int, serial: int, creation: int) -> None:
         self.node_name_ = node_name
         """ NOTE: native encoder assumes this is a string. """
 
@@ -36,25 +35,31 @@ class Pid(BasePid):
         self.creation_ = creation
 
     def is_local_to(self, node):
-        """ Compares self.node_name to other node.node_name
-            :param node: Check whether pid is local to the node.
-            :type node: pyrlang.node.Node
+        """Compares self.node_name to other node.node_name
+        :param node: Check whether pid is local to the node.
+        :type node: pyrlang.node.Node
         """
         return self.node_name_ == node.node_name_
 
     def __repr__(self) -> str:
-        return "<%d.%d.%d @ %s>" % (self.creation_, self.id_, self.serial_,
-                                    self.node_name_)
+        return "<%d.%d.%d @ %s>" % (
+            self.creation_,
+            self.id_,
+            self.serial_,
+            self.node_name_,
+        )
 
     def __str__(self) -> str:
         return self.__repr__()
 
     def equals(self, other) -> bool:
-        return isinstance(other, Pid) \
-            and self.node_name_ == other.node_name_ \
-            and self.id_ == other.id_ \
-            and self.serial_ == other.serial_ \
+        return (
+            isinstance(other, Pid)
+            and self.node_name_ == other.node_name_
+            and self.id_ == other.id_
+            and self.serial_ == other.serial_
             and self.creation_ == other.creation_
+        )
 
     __eq__ = equals
 
@@ -62,5 +67,6 @@ class Pid(BasePid):
         return not self.equals(other)
 
     def __hash__(self):
-        return hash((PID_MARKER, self.node_name_,
-                     self.id_, self.serial_, self.creation_))
+        return hash(
+            (PID_MARKER, self.node_name_, self.id_, self.serial_, self.creation_)
+        )

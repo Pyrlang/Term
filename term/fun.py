@@ -15,8 +15,8 @@ from term.basetypes import BaseTerm
 
 
 class Fun(BaseTerm):
-    """ Represents a pointer to a function in Erlang, with some variable
-        values captured. Not callable from Python. """
+    """Represents a pointer to a function in Erlang, with some variable
+    values captured. Not callable from Python."""
 
     def __init__(self, mod, arity, pid, index, uniq, old_index, old_uniq, free):
         # Pid of the Erlang process which created the function

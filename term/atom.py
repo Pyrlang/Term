@@ -18,19 +18,19 @@ ATOM_MARKER = "pyrlang.Atom"
 
 
 class Atom(str, BaseTerm):
-    """ Stores a string decoded from Erlang atom. Encodes back to atom.
-        Beware this is equivalent to a Python string, when using this as a dict key:
+    """Stores a string decoded from Erlang atom. Encodes back to atom.
+    Beware this is equivalent to a Python string, when using this as a dict key:
 
-            {Atom('foo'): 1, 'foo': 2} == {'foo': 2}
+        {Atom('foo'): 1, 'foo': 2} == {'foo': 2}
     """
 
     def __repr__(self):
         the_repr = super(Atom, self).__repr__()
-        return f'Atom({the_repr})'
+        return f"Atom({the_repr})"
 
     @staticmethod
-    def from_string_or_atom(s: Term) -> 'Atom':
-        """ Create an Atom from a string or return unchanged if it was an atom. """
+    def from_string_or_atom(s: Term) -> "Atom":
+        """Create an Atom from a string or return unchanged if it was an atom."""
         return s if isinstance(s, Atom) else Atom(s)
 
 
