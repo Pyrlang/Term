@@ -1,6 +1,6 @@
 from setuptools import setup
 
-VERSION = '1.5-alpha'
+VERSION = '2023.1001-alpha'
 PKGNAME = "pyrlang-term"
 MODULENAME = "term"
 DESCR = 'Erlang term and External Term Format codec in Python and native Rust extension'
@@ -23,8 +23,7 @@ try:
           long_description_content_type=LONG_DESCRPTION_CONTENT_TYPE,
           author=AUTHOR,
           author_email=AUTHOR_EMAIL,
-          rust_extensions=[RustExtension("term.native_codec_impl",
-                                         binding=Binding.RustCPython)],
+          rust_extensions=[RustExtension("term.native_codec_impl", binding=Binding.RustCPython)],
           packages=[MODULENAME],
           # rust extensions are not zip safe, just like C-extensions.
           zip_safe=False)

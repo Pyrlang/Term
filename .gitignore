@@ -15,3 +15,7 @@
 # Pyre Typecheck
 /.pyre
 /.pyre_configuration
+
+# Build outputs
+/dist
+*.pyd

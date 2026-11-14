@@ -1,2 +1,53 @@
 [build-system]
 requires = ["setuptools", "wheel", "setuptools-rust"]
+
+[tool.bumpver]
+current_version = "2023.1001-alpha"
+version_pattern = "YYYY.BUILD[-TAG]"
+commit_message = "bump version {old_version} -> {new_version}"
+commit = true
+tag = true
+push = true
+
+[project]
+name = "pyrlang-term"
+version = "2023.1001-alpha"
+description = "Erlang term and External Term Format codec in Python and native Rust extension"
+readme = "README.md"
+authors = [
+    { name = "Dmytro Lytovchenko", email = "dmytro.lytovchenko@gmail.com" },
+    { name = "Johan Sommerfeld", email = "pyrlang@s2hc.com" }
+]
+license = { file = "LICENSE" }
+classifiers = [
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+]
+keywords = ["erlang", "protocol", "encode", "decode", "etf", "term", "binary"]
+dependencies = [
+]
+requires-python = ">=3.7"
+
+[project.optional-dependencies]
+dev = [
+    "black", "bumpver", "isort", "pip-tools", "pytest",
+    "Jinja2>=2.10.1", "MarkupSafe>=1.0", "Pillow>=4.0.0", "Pygments>=2.2.0", "Sphinx>=1.6.2"
+]
+
+[project.urls]
+Homepage = "https://github.com/Pyrlang/Term/"
+
+[tool.bumpver.file_patterns]
+"pyproject.toml" = [
+    'current_version = "{version}"',
+]
+"setup.py" = [
+    "{version}",
+    "{pep440_version}",
+]
+"README.md" = [
+    "{version}",
+    "{pep440_version}",
+]
+
