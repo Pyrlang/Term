@@ -25,7 +25,7 @@ test: clearterminal
 # Regenerate the golden ETF fixtures with the Erlang/OTP on PATH (use OTP 29).
 .PHONY: fixtures
 fixtures:
-	erlc -o test/erl test/erl/gen_fixtures.erl
+	erlc -o test/erl test/erl/gen_fixtures.erl test/erl/otp_vectors.erl
 	erl -noshell -pa test/erl -run gen_fixtures main test/fixtures -s init stop
 
 .PHONY: clearterminal dtest

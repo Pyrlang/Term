@@ -299,6 +299,10 @@ def binary_to_term_2(data: bytes, options: OptionsType = None) -> tuple[Term, by
         list_tail, tail = binary_to_term_2(tail)
         if list_tail == NIL:
             return result_l, tail
+        if not result_l:
+            # A zero-length list is its tail: <<108,0,0,0,0,97,42>> is 42
+            # (binary_SUITE:robustness); the native codec agrees.
+            return list_tail, tail
         return ImproperList(result_l, list_tail), tail
 
     if tag == TAG_SMALL_TUPLE_EXT:

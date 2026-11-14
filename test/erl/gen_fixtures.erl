@@ -17,19 +17,30 @@
 %%
 %% Run from the term-src directory (or `make fixtures`):
 %%
-%%   erlc -o test/erl test/erl/gen_fixtures.erl
+%%   erlc -o test/erl test/erl/gen_fixtures.erl test/erl/otp_vectors.erl
 %%   erl -noshell -pa test/erl -run gen_fixtures main test/fixtures -s init stop
 %%
 %% For each fixture, writes <OutDir>/<name>.etf (term_to_binary(Term, Opts))
 %% and one line in <OutDir>/MANIFEST.tsv with the columns
-%%   name, otp_release, stability, source, options
+%%   name, otp_release, stability, source, options, features
 %% `source` is the Erlang expression that built the term, re-printed by
 %% erl_pp on one line (integers appear in decimal); helper calls such as
 %% pid/3 refer to the functions at the end of this module. `stability` is
 %% `stable` when the bytes depend only on the OTP release, or `volatile`
 %% when they also depend on this module's compiled code (fun Uniq values).
-%% Old *.etf files in <OutDir> are removed first, so the directory always
-%% matches the manifest.
+%% `features` lists, comma-separated, the parts of the term that the tests
+%% map to plan steps (see features/2).
+%%
+%% It also writes the vectors copied from OTP's test suites (otp_vectors.erl,
+%% plan step TERM-04) to <OutDir>/otp/, with <OutDir>/otp/MANIFEST.tsv:
+%%   name, otp_release, stability, origin, encoding, features
+%% `origin` is "<suite>:<case>"; `encoding` is the term_to_binary options, or
+%% `raw` for bytes written as they are (hand-built or from the C ei encoder).
+%% `stability` is `volatile` when the term holds a local fun, or a pid, port
+%% or reference of this node. Byte-identical vectors are written once.
+%%
+%% Old *.etf files in each directory are removed first, so a directory
+%% always matches its manifest.
 
 -module(gen_fixtures).
 
@@ -52,17 +63,30 @@
 
 %% Entry point for `erl -run gen_fixtures main OutDir`.
 main([OutDir]) ->
-    ok = filelib:ensure_dir(filename:join(OutDir, "MANIFEST.tsv")),
-    Old = filelib:wildcard(filename:join(OutDir, "*.etf")),
-    lists:foreach(fun(F) -> ok = file:delete(F) end, Old),
     Release = erlang:system_info(otp_release),
+    clean_dir(OutDir),
     Fixtures = fixtures(),
     ok = check_unique([Name || {Name, _, _, _, _} <- Fixtures]),
     Lines = [write_fixture(OutDir, Release, F) || F <- Fixtures],
-    Header = "name\totp_release\tstability\tsource\toptions\n",
+    write_manifest(OutDir, "name\totp_release\tstability\tsource\toptions\tfeatures\n",
+                   Lines),
+    OtpDir = filename:join(OutDir, "otp"),
+    clean_dir(OtpDir),
+    Vectors = otp_vectors(),
+    OtpLines = [write_vector(OtpDir, Release, V) || V <- Vectors],
+    write_manifest(OtpDir, "name\totp_release\tstability\torigin\tencoding\tfeatures\n",
+                   OtpLines),
+    io:format("wrote ~b fixtures to ~ts and ~b vectors to ~ts~n",
+              [length(Fixtures), OutDir, length(Vectors), OtpDir]).
+
+clean_dir(Dir) ->
+    ok = filelib:ensure_dir(filename:join(Dir, "MANIFEST.tsv")),
+    Old = filelib:wildcard(filename:join(Dir, "*.etf")),
+    lists:foreach(fun(F) -> ok = file:delete(F) end, Old).
+
+write_manifest(Dir, Header, Lines) ->
     Manifest = unicode:characters_to_binary([Header | Lines]),
-    ok = file:write_file(filename:join(OutDir, "MANIFEST.tsv"), Manifest),
-    io:format("wrote ~b fixtures to ~ts~n", [length(Fixtures), OutDir]).
+    ok = file:write_file(filename:join(Dir, "MANIFEST.tsv"), Manifest).
 
 write_fixture(OutDir, Release, {Name, Stability, Source, Term, Opts}) ->
     Bin = term_to_binary(Term, Opts),
@@ -70,8 +94,167 @@ write_fixture(OutDir, Release, {Name, Stability, Source, Term, Opts}) ->
     Term = binary_to_term(Bin),
     File = filename:join(OutDir, atom_to_list(Name) ++ ".etf"),
     ok = file:write_file(File, Bin),
-    io_lib:format("~ts\t~ts\t~ts\t~ts\t~0p~n",
-                  [Name, Release, Stability, pretty(Source), Opts]).
+    io_lib:format("~ts\t~ts\t~ts\t~ts\t~0p\t~ts~n",
+                  [Name, Release, Stability, pretty(Source), Opts,
+                   features_text(features(Term, Opts))]).
+
+%% The OTP-derived vectors as {Name, Origin, Encoding, Bin, Term, Features}:
+%% encoded, de-duplicated by bytes, and numbered per origin.
+otp_vectors() ->
+    Encoded = [{Origin, encode_item(Item)}
+               || {Origin, Items} <- otp_vectors:groups(), Item <- Items],
+    Unique = dedupe(Encoded, #{}, []),
+    number(Unique, #{}).
+
+encode_item({t2b, Term, Opts}) ->
+    Bin = term_to_binary(Term, Opts),
+    Term = binary_to_term(Bin),
+    {lists:flatten(io_lib:format("~0p", [Opts])), Bin, Term, features(Term, Opts)};
+encode_item({raw, Bin, Extra}) ->
+    Term = binary_to_term(Bin),
+    {"raw", Bin, Term, lists:usort(Extra ++ features(Term, []))}.
+
+dedupe([{_, {_, Bin, _, _}} = V | Rest], Seen, Acc) ->
+    case Seen of
+        #{Bin := _} -> dedupe(Rest, Seen, Acc);
+        _ -> dedupe(Rest, Seen#{Bin => true}, [V | Acc])
+    end;
+dedupe([], _, Acc) ->
+    lists:reverse(Acc).
+
+number([{Origin, {Encoding, Bin, Term, Features}} | Rest], Counts) ->
+    N = maps:get(Origin, Counts, 0) + 1,
+    true = N < 1000,
+    Prefix = lists:flatten(string:replace(Origin, ":", ".", all)),
+    Name = lists:flatten(io_lib:format("~ts.~3..0b", [Prefix, N])),
+    [{Name, Origin, Encoding, Bin, Term, Features}
+     | number(Rest, Counts#{Origin => N})];
+number([], _) ->
+    [].
+
+write_vector(Dir, Release, {Name, Origin, Encoding, Bin, Term, Features}) ->
+    ok = file:write_file(filename:join(Dir, Name ++ ".etf"), Bin),
+    Stability = case volatile(Term) of
+                    true -> volatile;
+                    false -> stable
+                end,
+    io_lib:format("~ts\t~ts\t~ts\t~ts\t~ts\t~ts~n",
+                  [Name, Release, Stability, Origin, Encoding,
+                   features_text(Features)]).
+
+features_text(Features) ->
+    lists:join(",", [atom_to_list(F) || F <- Features]).
+
+%% What a term contains that the Python tests map to the plan step that
+%% makes it work (test/fixture_manifest.py has the mapping):
+%%   port, export_fun, local_fun, record, bitstring (not a whole number of
+%%   bytes), float_ext (a float written with {minor_version, 0}),
+%%   int_bits_32 (2^31 =< |I| < 2^32, except -2^31), str_latin1 (a list
+%%   written as STRING_EXT holding a byte >= 128), unhashable_key (a map key
+%%   whose Python value would be a list or a dict).
+features(Term, Opts) ->
+    lists:usort(feat(Term, lists:member({minor_version, 0}, Opts), [])).
+
+feat(T, _, Acc) when is_integer(T) ->
+    A = abs(T),
+    case A >= 1 bsl 31 andalso A < 1 bsl 32 andalso T =/= -(1 bsl 31) of
+        true -> [int_bits_32 | Acc];
+        false -> Acc
+    end;
+feat(T, true, Acc) when is_float(T) -> [float_ext | Acc];
+feat(T, _, Acc) when is_float(T); is_atom(T); is_pid(T); is_reference(T);
+                     is_binary(T) -> Acc;
+feat(T, _, Acc) when is_port(T) -> [port | Acc];
+feat(T, _, Acc) when is_bitstring(T) -> [bitstring | Acc];
+feat(T, F0, Acc) when is_function(T) ->
+    case erlang:fun_info(T, type) of
+        {type, external} ->
+            [export_fun | Acc];
+        {type, local} ->
+            {env, Env} = erlang:fun_info(T, env),
+            feat_list(Env, F0, [local_fun | Acc])
+    end;
+feat(T, F0, Acc) when is_list(T) ->
+    Acc1 = case is_string_ext(T) andalso lists:any(fun(C) -> C >= 128 end, T) of
+               true -> [str_latin1 | Acc];
+               false -> Acc
+           end,
+    feat_list(T, F0, Acc1);
+feat(T, F0, Acc) when is_tuple(T) ->
+    feat_list(tuple_to_list(T), F0, Acc);
+feat(T, F0, Acc) when is_map(T) ->
+    maps:fold(fun(K, V, A) ->
+                      A1 = case py_hashable(K) of
+                               true -> A;
+                               false -> [unhashable_key | A]
+                           end,
+                      feat(V, F0, feat(K, F0, A1))
+              end, Acc, T);
+feat(T, _, Acc) ->
+    true = is_native_record(T),
+    [record | Acc].
+
+%% Walks a list that may be improper.
+feat_list([H | T], F0, Acc) -> feat_list(T, F0, feat(H, F0, Acc));
+feat_list([], _, Acc) -> Acc;
+feat_list(Tail, F0, Acc) -> feat(Tail, F0, Acc).
+
+%% term_to_binary writes a list as STRING_EXT when this holds.
+is_string_ext(L) -> L =/= [] andalso is_byte_list(L, 0).
+
+is_byte_list([], N) -> N =< 65535;
+is_byte_list([C | T], N) when is_integer(C), C >= 0, C =< 255 ->
+    is_byte_list(T, N + 1);
+is_byte_list(_, _) -> false.
+
+%% Python decodes STRING_EXT to str, other lists to list, maps to dict.
+py_hashable(K) when is_list(K) -> is_string_ext(K);
+py_hashable(K) when is_map(K) -> false;
+py_hashable(K) when is_tuple(K) -> lists:all(fun py_hashable/1, tuple_to_list(K));
+py_hashable(_) -> true.
+
+-if(?OTP_RELEASE >= 29).
+is_native_record(T) -> erlang:is_record(T).
+
+%% Field values of a native record; [] for any other term.
+record_values(T) ->
+    case erlang:is_record(T) of
+        true -> [records:get(F, T) || F <- records:get_field_names(T)];
+        false -> []
+    end.
+-else.
+is_native_record(_) -> false.
+
+record_values(_) -> [].
+-endif.
+
+%% Bytes that change between runs of this generator: local funs (Uniq
+%% follows the code), this node's pids, ports and refs, and maps with keys
+%% other than integers (the key order follows atom indexes and hash salts,
+%% which differ per VM run).
+volatile(Term) ->
+    any_sub(fun(T) ->
+                    (is_function(T) andalso
+                     erlang:fun_info(T, type) =:= {type, local})
+                        orelse ((is_pid(T) orelse is_port(T) orelse is_reference(T))
+                                andalso node(T) =:= node())
+                        orelse (is_map(T) andalso map_size(T) > 1
+                                andalso not lists:all(fun is_integer/1, maps:keys(T)))
+            end, Term).
+
+any_sub(P, T) ->
+    P(T) orelse
+        if
+            is_list(T) -> any_list(P, T);
+            is_tuple(T) -> any_list(P, tuple_to_list(T));
+            is_map(T) -> any_list(P, maps:keys(T) ++ maps:values(T));
+            is_function(T) -> {env, Env} = erlang:fun_info(T, env), any_list(P, Env);
+            true -> any_list(P, record_values(T))
+        end.
+
+any_list(P, [H | T]) -> any_sub(P, H) orelse any_list(P, T);
+any_list(_, []) -> false;
+any_list(P, Tail) -> any_sub(P, Tail).
 
 check_unique(Names) ->
     case Names -- lists:usort(Names) of

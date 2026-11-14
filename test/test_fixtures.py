@@ -36,12 +36,21 @@ class _Fixture:
     stability: str
     source: str
     options: str
+    # Used by test_roundtrip.py (fixture_manifest.py); not by this file.
+    features: str
 
 
 def _load_manifest() -> list[_Fixture]:
     lines = (FIXTURE_DIR / "MANIFEST.tsv").read_text(encoding="utf-8").splitlines()
     header = lines[0].split("\t")
-    assert header == ["name", "otp_release", "stability", "source", "options"]
+    assert header == [
+        "name",
+        "otp_release",
+        "stability",
+        "source",
+        "options",
+        "features",
+    ]
     return [_Fixture(*line.split("\t")) for line in lines[1:]]
 
 

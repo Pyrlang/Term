@@ -44,6 +44,11 @@ Homepage = "https://github.com/Pyrlang/Term/"
 # PEP 561: ship the type marker and the stub for the native module.
 term = ["py.typed", "*.pyi"]
 
+[tool.pytest.ini_options]
+markers = [
+    "erlang: needs Erlang/OTP (erl on PATH); skipped when it is missing",
+]
+
 [tool.black]
 # Matches requires-python (decision 2 in .agents/00-plan.md).
 target-version = ["py311"]
