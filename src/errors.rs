@@ -14,7 +14,7 @@
 
 use std::str::Utf8Error;
 
-use pyo3::{CastError, CastIntoError, PyErr};
+use pyo3::{CastError, CastIntoError, PyErr, Python};
 
 use crate::reader::ReadError;
 
@@ -28,10 +28,15 @@ pub enum CodecError {
     UnsupportedETFVersion,
     #[error("Compressed size does not match decompressed")]
     CompressedSizeMismatch,
-    #[error("Read failed")]
+    #[error("Read failed: {0}")]
     ReadError(#[from] ReadError),
+    // A Python call failed (a user hook raised, a type check failed); the
+    // original exception becomes the PyCodecError's __cause__.
     #[error("{txt}")]
     PythonError { txt: String, error: PyErr },
+    // A decoded map key that a Python dict cannot hold (a list, a dict).
+    #[error("Map key of type {type_name} is not hashable")]
+    UnhashableKey { type_name: String, error: PyErr },
     #[error("Unrecognized term tag byte: {}", b)]
     UnknownTermTagByte { b: u8 },
     // A pid, port or reference whose node is not an atom (OTP rejects it).
@@ -54,7 +59,7 @@ pub enum CodecError {
     TooLong { size: usize },
     #[error("Float value {} is not finite", f)]
     NonFiniteFloat { f: f64 },
-    #[error("IOError")]
+    #[error("IOError: {0}")]
     IOError(#[from] std::io::Error),
     #[error("Encoding error")]
     EncodingError(#[from] Utf8Error),
@@ -88,9 +93,17 @@ impl From<CastIntoError<'_>> for CodecError {
 }
 
 /// Every codec failure, including a Python error met on the way, reaches
-/// Python as `PyCodecError` carrying the formatted message.
+/// Python as `PyCodecError` carrying the formatted message; a Python error
+/// is kept as its `__cause__`.
 impl From<CodecError> for PyErr {
     fn from(err: CodecError) -> PyErr {
-        PyCodecError::new_err(err.to_string())
+        let codec_err = PyCodecError::new_err(err.to_string());
+        match err {
+            CodecError::PythonError { error, .. } | CodecError::UnhashableKey { error, .. } => {
+                Python::attach(|py| codec_err.set_cause(py, Some(error)));
+                codec_err
+            }
+            _ => codec_err,
+        }
     }
 }

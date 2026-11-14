@@ -562,16 +562,12 @@ def test_walker_reads_every_fixture() -> None:
 
 # (generator, codec id) -> plan steps, for test_broken_fixtures.
 MUTATIONS_BLOCKED: dict[tuple[str, str], str] = {
-    # Python: IndexError, struct.error, TypeError, UnicodeDecodeError, short
-    # reads that "succeed" (no bounds checks). Both: a compressed term whose
-    # zlib checksum is cut off still decodes.
-    ("truncate", "py"): "TERM-08, TERM-09",
+    # Both: a compressed term whose zlib checksum is cut off still decodes.
+    ("truncate", "py"): "TERM-09",
     ("truncate", "native"): "TERM-09",
-    ("length", "py"): "TERM-08",
     # Vec::with_capacity / vec![0; n] from the length field: the process
     # aborts ("memory allocation of 34359738360 bytes failed").
     ("length", "native"): "TERM-09",
-    ("flip", "py"): "TERM-08",
     ("flip", "native"): "TERM-09",
 }
 
@@ -593,21 +589,10 @@ def _vector_blocks() -> tuple[dict[str, str], dict[tuple[str, str], str]]:
     both[b + "otp_5484.pid_bad_values"] = "TERM-11"
     for n in ("ref_first_word_2p18", "ref_7_words", "pid_creation_4", "ref_creation_4"):
         both["node_container_SUITE.bad_nc." + n] = "TERM-11"
-    # Python reads past the end: IndexError, UnicodeDecodeError, short reads.
-    by[(b + "bad_binary_to_term.atom_utf8_cut_char", "py")] = "TERM-08"
-    by[(b + "bad_binary_to_term_2.large_big_huge", "py")] = "TERM-08"
-    for length in range(0xFFFFFFFF, 0xFFFFFFF0, -1):
-        by[(b + "otp_5933.n_%X" % length, "py")] = "TERM-08"
-        by[(b + "otp_5933.o_%X" % length, "py")] = "TERM-08"
     for bit in range(32):
-        for what in ("fun_num_free", "closure_num_free"):
-            by[(b + "otp_8117.%s_neg_2p%d" % (what, bit), "py")] = "TERM-08"
         for what in ("list_len", "tuple_arity"):
-            by[(b + "otp_8117.%s_neg_2p%d" % (what, bit), "py")] = "TERM-08"
             # Native pre-allocates 2^31.. elements and aborts.
             by[(b + "otp_8117.%s_neg_2p%d" % (what, bit), "native")] = "TERM-09"
-    for n in ("2224", "24619", "25681"):
-        by[(b + "otp_8180.zzz.terms." + n, "py")] = "TERM-08"
     for n in ("1197", "2224", "24619", "25681", "26563", "26744", "527"):
         by[(b + "otp_8180.zzz.terms." + n, "native")] = "TERM-09"
     return both, by

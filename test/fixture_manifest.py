@@ -47,10 +47,7 @@ ROUNDTRIP_BLOCKED_BY: dict[tuple[str, str], str] = {}
 REJECTED_FEATURE = "unhashable_key"
 
 # Codecs that get the rejection wrong yet: codec id -> plan step.
-REJECTED_WRONGLY_BY: dict[str, str] = {
-    # The Python codec lets the dict's TypeError escape.
-    "py": "TERM-08",
-}
+REJECTED_WRONGLY_BY: dict[str, str] = {}
 
 
 # One line of a MANIFEST.tsv.

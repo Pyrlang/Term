@@ -20,6 +20,7 @@ import math
 import struct
 from typing import Any, Callable, NoReturn, Optional, Union
 from zlib import decompressobj
+from zlib import error as zlib_error
 
 from term import util
 from term.atom import Atom, StrictAtom
@@ -96,41 +97,123 @@ def binary_to_term(data: bytes, options: OptionsType = None) -> tuple[Term, byte
     """Strip 131 header and unpack if the data was compressed.
 
     :param data: The incoming encoded data with the 131 byte
-    :param options:
-           * "atom": "str" | "bytes" | "Atom" | "StrictAtom" (default "Atom").
-             Returns atoms as strings, as bytes or as atom.Atom objects.
-           * "byte_string": "str" | "bytes" | "int_list" (default "str").
-             Returns 8-bit strings as Python str or bytes or list of integers.
-           * "decode_hook" : callable. Python function called for each
-             decoded term.
+    :param options: as for :py:func:`binary_to_term_2`
     :raises PyCodecError: when the tag is not 131, when compressed
-        data is incomplete or corrupted
-    :returns: Remaining unconsumed bytes
+        data is incomplete or corrupted, on any malformed input, and when
+        an option callable raises (the original is its ``__cause__``)
+    :returns: The value and the remaining unconsumed bytes
     """
-    if options is None:
-        options = {}
-
-    if data[0] != ETF_VERSION_TAG:
+    dec = _Decoder(options)
+    reader = _Reader(data)
+    if reader.u8() != ETF_VERSION_TAG:
         raise PyCodecError("Unsupported external term version")
 
-    if data[1] == TAG_COMPRESSED:
+    if reader.peek() == TAG_COMPRESSED:
+        reader.u8()
+        decomp_size = reader.u32()
         do = decompressobj()
-        decomp_size = util.u32(data, 2)
-        decode_data = do.decompress(data[6:]) + do.flush()
+        try:
+            decode_data = do.decompress(reader.rest()) + do.flush()
+        except zlib_error as e:
+            raise PyCodecError("Compressed term: %s" % e) from e
         if len(decode_data) != decomp_size:
             # Data corruption?
             raise PyCodecError("Compressed size mismatch with actual")
-    else:
-        decode_data = data[1:]
+        reader = _Reader(decode_data)
 
-    return binary_to_term_2(decode_data, options)
+    value = dec.decode(reader)
+    return value, reader.rest()
+
+
+# Big-endian fixed-size fields of the external term format.
+_U16 = struct.Struct(">H")
+_U32 = struct.Struct(">I")
+_I32 = struct.Struct(">i")
+_F64 = struct.Struct(">d")
+
+
+# A cursor over the input, as reader.rs in the native codec: every read is
+# checked against the bytes that remain, so malformed input raises
+# PyCodecError, never IndexError or struct.error.
+class _Reader:
+    __slots__ = ("data_", "pos_")
+
+    def __init__(self, data: bytes) -> None:
+        self.data_ = data
+        self.pos_ = 0
+
+    def remaining(self) -> int:
+        return len(self.data_) - self.pos_
+
+    def _need(self, n: int) -> int:
+        """Claim ``n`` bytes; return where they start."""
+        start = self.pos_
+        if n > len(self.data_) - start:
+            raise PyCodecError(
+                "Incomplete data: %d bytes needed at offset %d, %d left"
+                % (n, start, len(self.data_) - start)
+            )
+        self.pos_ = start + n
+        return start
+
+    def read(self, n: int) -> bytes:
+        start = self._need(n)
+        return self.data_[start : start + n]
+
+    def peek(self) -> int:
+        if self.pos_ >= len(self.data_):
+            incomplete_data("offset %d" % self.pos_)
+        return self.data_[self.pos_]
+
+    def u8(self) -> int:
+        return self.data_[self._need(1)]
+
+    def u16(self) -> int:
+        value: int = _U16.unpack_from(self.data_, self._need(2))[0]
+        return value
+
+    def u32(self) -> int:
+        value: int = _U32.unpack_from(self.data_, self._need(4))[0]
+        return value
+
+    def i32(self) -> int:
+        value: int = _I32.unpack_from(self.data_, self._need(4))[0]
+        return value
+
+    def f64(self) -> float:
+        value: float = _F64.unpack_from(self.data_, self._need(8))[0]
+        return value
+
+    def rest(self) -> bytes:
+        """The unread bytes; the reader is at the end afterwards."""
+        start = self.pos_
+        self.pos_ = len(self.data_)
+        return self.data_[start:]
 
 
 def _atom_text(name: bytes, tag: int) -> str:
     """The text of an atom: tags 100 and 115 carry Latin-1, 118 and 119 UTF-8."""
-    return name.decode(
-        "latin-1" if tag in (TAG_ATOM_EXT, TAG_SMALL_ATOM_EXT) else "utf8"
-    )
+    if tag in (TAG_ATOM_EXT, TAG_SMALL_ATOM_EXT):
+        return name.decode("latin-1")
+    try:
+        return name.decode("utf8")
+    except UnicodeDecodeError as e:
+        raise PyCodecError("Atom is not valid UTF-8: %s" % e) from e
+
+
+def _read_atom_text(reader: _Reader, tag: int) -> str:
+    """The length and text of an atom whose tag was just read."""
+    size = reader.u16() if tag in (TAG_ATOM_EXT, TAG_ATOM_UTF8_EXT) else reader.u8()
+    return _atom_text(reader.read(size), tag)
+
+
+# Tags that carry an atom.
+_ATOM_TAGS = (
+    TAG_ATOM_EXT,
+    TAG_ATOM_UTF8_EXT,
+    TAG_SMALL_ATOM_EXT,
+    TAG_SMALL_ATOM_UTF8_EXT,
+)
 
 
 def _get_create_atom_fn(
@@ -178,6 +261,12 @@ def _get_create_str_fn(opt: object) -> Callable[[bytes], Union[str, bytes, list[
     )
 
 
+def _user_error(e: Exception) -> PyCodecError:
+    """A PyCodecError for an exception raised by an option callable; the
+    caller raises it ``from e`` so the original stays reachable."""
+    return PyCodecError("%s: %s" % (type(e).__name__, e))
+
+
 # The decoding options, resolved once per call and shared by every nested
 # term, so that options and hooks apply at every depth (as in the native codec).
 class _Decoder:
@@ -209,46 +298,40 @@ class _Decoder:
             return (value, bits)
         return BitString(value, bits)
 
-    def atom(self, name: bytes, tag: int) -> Any:
+    def atom(self, text: str) -> Any:
         """An atom as the options ask; true, false, undefined become Python
         True, False, None whatever the options say."""
-        if name == b"true":
+        if text == "true":
             return True
-        elif name == b"false":
+        elif text == "false":
             return False
-        elif name == b"undefined":
+        elif text == "undefined":
             return None
-        return self.create_atom_(_atom_text(name, tag))
+        try:
+            return self.create_atom_(text)
+        except Exception as e:  # user code (atom_call) may raise anything
+            raise _user_error(e) from e
 
-    def decode(self, data: bytes) -> tuple[Any, bytes]:
+    def decode(self, reader: _Reader) -> Any:
         """Decode one term and pass it through the decode hook of its type."""
-        value, tail = _decode_term(self, data)
+        value = _decode_term(self, reader)
         if self.decode_hook_:
             hook = self.decode_hook_.get(type(value).__name__)
             if hook is not None:
-                value = hook(value)
-        return value, tail
+                try:
+                    value = hook(value)
+                except Exception as e:  # user code may raise anything
+                    raise _user_error(e) from e
+        return value
 
 
-def _decode_node(data: bytes) -> tuple[Atom, bytes]:
+def _decode_node(reader: _Reader) -> Atom:
     """The node name of a pid, port or reference: always an ``Atom``,
     whatever the options and hooks say."""
-    tag = data[0]
-    if tag in (TAG_ATOM_EXT, TAG_ATOM_UTF8_EXT):
-        if len(data) < 3:
-            incomplete_data("decoding length for a node name")
-        start = 3
-        end = start + util.u16(data, 1)
-    elif tag in (TAG_SMALL_ATOM_EXT, TAG_SMALL_ATOM_UTF8_EXT):
-        if len(data) < 2:
-            incomplete_data("decoding length for a node name")
-        start = 2
-        end = start + data[1]
-    else:
+    tag = reader.u8()
+    if tag not in _ATOM_TAGS:
         raise PyCodecError("Node name must be an atom, found tag %d" % tag)
-    if end > len(data):
-        incomplete_data("decoding text for a node name")
-    return Atom(_atom_text(data[start:end], tag)), data[end:]
+    return Atom(_read_atom_text(reader, tag))
 
 
 def binary_to_term_2(data: bytes, options: OptionsType = None) -> tuple[Term, bytes]:
@@ -289,251 +372,161 @@ def binary_to_term_2(data: bytes, options: OptionsType = None) -> tuple[Term, by
     :return: The function consumes as much data as
         possible and returns the tail. Tail can be used again to parse
         another term if there was any.
-    :raises PyCodecError(str): on various errors
+    :raises PyCodecError(str): on malformed input, and when an option
+        callable raises (the original exception is its ``__cause__``)
     """
-    return _Decoder(options).decode(data)
+    dec = _Decoder(options)
+    reader = _Reader(data)
+    value = dec.decode(reader)
+    return value, reader.rest()
 
 
-def _decode_term(dec: _Decoder, data: bytes) -> tuple[Any, bytes]:
+def _decode_list(dec: _Decoder, reader: _Reader) -> Any:
+    count = reader.u32()
+    elements = [dec.decode(reader) for _ in range(count)]
+    # A NIL tail makes a proper list; it is not a value of its own, so no
+    # decode hook sees it.
+    if reader.peek() == TAG_NIL_EXT:
+        reader.u8()
+        return elements
+    tail = dec.decode(reader)
+    if not elements:
+        # A zero-length list is its tail: <<108,0,0,0,0,97,42>> is 42
+        # (binary_SUITE:robustness).
+        return tail
+    return ImproperList(elements, tail)
+
+
+def _decode_map(dec: _Decoder, reader: _Reader) -> dict[Any, Any]:
+    count = reader.u32()
+    result: dict[Any, Any] = {}
+    for _ in range(count):
+        key = dec.decode(reader)
+        value = dec.decode(reader)
+        try:
+            result[key] = value
+        except TypeError as e:
+            raise PyCodecError(
+                "Map key of type %s is not hashable" % type(key).__name__
+            ) from e
+    return result
+
+
+def _decode_fun(dec: _Decoder, reader: _Reader) -> Fun:
+    reader.u32()  # Size: OTP ignores it too (TERM-05)
+    arity = reader.u8()
+    uniq = reader.read(16)
+    index = reader.u32()
+    num_free = reader.u32()
+    mod = dec.decode(reader)
+    old_index = dec.decode(reader)
+    old_uniq = dec.decode(reader)
+    pid = dec.decode(reader)
+    free_vars = [dec.decode(reader) for _ in range(num_free)]
+    return Fun(
+        mod=mod,
+        arity=arity,
+        pid=pid,
+        index=index,
+        uniq=uniq,
+        old_index=old_index,
+        old_uniq=old_uniq,
+        free=free_vars,
+    )
+
+
+def _decode_term(dec: _Decoder, reader: _Reader) -> Any:
     """Decode one term with the options in ``dec``; nested terms go through
     ``dec.decode``."""
-    tag = data[0]
+    tag = reader.u8()
 
-    if tag in [TAG_ATOM_EXT, TAG_ATOM_UTF8_EXT]:
-        len_data = len(data)
-        if len_data < 3:
-            return incomplete_data("decoding length for an atom name")
-
-        len_expected = util.u16(data, 1) + 3
-        if len_expected > len_data:
-            return incomplete_data("decoding text for an atom")
-
-        name = data[3:len_expected]
-        return dec.atom(name, tag), data[len_expected:]
-
-    if tag in [TAG_SMALL_ATOM_EXT, TAG_SMALL_ATOM_UTF8_EXT]:
-        len_data = len(data)
-        if len_data < 2:
-            return incomplete_data("decoding length for a small-atom name")
-
-        len_expected = data[1] + 2
-        name = data[2:len_expected]
-        return dec.atom(name, tag), data[len_expected:]
+    if tag in _ATOM_TAGS:
+        return dec.atom(_read_atom_text(reader, tag))
 
     if tag == TAG_NIL_EXT:
-        return [], data[1:]
+        return []
 
     if tag == TAG_STRING_EXT:
-        len_data = len(data)
-        if len_data < 3:
-            return incomplete_data("decoding length for a string")
-
-        len_expected = util.u16(data, 1) + 3
-
-        if len_expected > len_data:
-            return incomplete_data()
-
-        return dec.create_str_(data[3:len_expected]), data[len_expected:]
+        return dec.create_str_(reader.read(reader.u16()))
 
     if tag == TAG_LIST_EXT:
-        if len(data) < 5:
-            return incomplete_data("decoding length for a list")
-        len_expected = util.u32(data, 1)
-        result_l = []
-        tail = data[5:]
-        while len_expected > 0:
-            term1, tail = dec.decode(tail)
-            result_l.append(term1)
-            len_expected -= 1
-
-        # A NIL tail makes a proper list; it is not a value of its own, so
-        # no decode hook sees it.
-        if tail[:1] == bytes([TAG_NIL_EXT]):
-            return result_l, tail[1:]
-        list_tail, tail = dec.decode(tail)
-        if not result_l:
-            # A zero-length list is its tail: <<108,0,0,0,0,97,42>> is 42
-            # (binary_SUITE:robustness); the native codec agrees.
-            return list_tail, tail
-        return ImproperList(result_l, list_tail), tail
+        return _decode_list(dec, reader)
 
     if tag == TAG_SMALL_TUPLE_EXT:
-        if len(data) < 2:
-            return incomplete_data("decoding length for a small tuple")
-        len_expected = data[1]
-        result_t = []
-        tail = data[2:]
-        while len_expected > 0:
-            term1, tail = dec.decode(tail)
-            result_t.append(term1)
-            len_expected -= 1
-
-        return tuple(result_t), tail
+        arity = reader.u8()
+        return tuple([dec.decode(reader) for _ in range(arity)])
 
     if tag == TAG_LARGE_TUPLE_EXT:
-        if len(data) < 5:
-            return incomplete_data("decoding length for a large tuple")
-        len_expected = util.u32(data, 1)
-        result_lt = []
-        tail = data[5:]
-        while len_expected > 0:
-            term1, tail = dec.decode(tail)
-            result_lt.append(term1)
-            len_expected -= 1
-
-        return tuple(result_lt), tail
+        arity = reader.u32()
+        return tuple([dec.decode(reader) for _ in range(arity)])
 
     if tag == TAG_SMALL_INT:
-        if len(data) < 2:
-            return incomplete_data("decoding a 8-bit small uint")
-        return data[1], data[2:]
+        return reader.u8()
 
     if tag == TAG_INT:
-        if len(data) < 5:
-            return incomplete_data("decoding a 32-bit int")
-        return util.i32(data, 1), data[5:]
+        return reader.i32()
 
     if tag == TAG_PID_EXT:
-        node, tail = _decode_node(data[1:])
-        id1 = util.u32(tail, 0)
-        serial = util.u32(tail, 4)
-        creation = tail[8]
-
-        assert isinstance(node, Atom)
-        pid1 = Pid(node_name=node, id=id1, serial=serial, creation=creation)
-        return pid1, tail[9:]
+        node = _decode_node(reader)
+        id1 = reader.u32()
+        serial = reader.u32()
+        creation = reader.u8()
+        return Pid(node_name=node, id=id1, serial=serial, creation=creation)
 
     if tag == TAG_NEW_PID_EXT:
-        node, tail = _decode_node(data[1:])
-        id1 = util.u32(tail, 0)
-        serial = util.u32(tail, 4)
-        creation = util.u32(tail, 8)
-
-        assert isinstance(node, Atom)
-        pid2 = Pid(node_name=node, id=id1, serial=serial, creation=creation)
-        return pid2, tail[12:]
+        node = _decode_node(reader)
+        id1 = reader.u32()
+        serial = reader.u32()
+        creation = reader.u32()
+        return Pid(node_name=node, id=id1, serial=serial, creation=creation)
 
     if tag == TAG_NEW_REF_EXT:
-        if len(data) < 2:
-            return incomplete_data("decoding length for a new-ref")
-        term_len = util.u16(data, 1)
-        node, tail = _decode_node(data[3:])
-        creation = tail[0]
-        id_len = 4 * term_len
-        ref_id = tail[1 : id_len + 1]
-
-        ref = Reference(node_name=node, creation=creation, refid=ref_id)
-        return ref, tail[id_len + 1 :]
-
-    if tag == TAG_NEWER_REF_EXT:
-        if len(data) < 2:
-            return incomplete_data("decoding length for a newer-ref")
-        term_len = util.u16(data, 1)
-        node, tail = _decode_node(data[3:])
-        creation = util.u32(tail, 0)
-        id_len = 4 * term_len
-        ref_id = tail[4 : id_len + 4]
-
-        ref = Reference(node_name=node, creation=creation, refid=ref_id)
-        return ref, tail[id_len + 4 :]
-
-    if tag == TAG_MAP_EXT:
-        if len(data) < 5:
-            return incomplete_data("decoding length for a map")
-        len_expected = util.u32(data, 1)
-        result_m = {}
-        tail = data[5:]
-        while len_expected > 0:
-            term1, tail = dec.decode(tail)
-            term2, tail = dec.decode(tail)
-            result_m[term1] = term2
-            len_expected -= 1
-
-        return result_m, tail
-
-    if tag == TAG_BINARY_EXT:
-        len_data = len(data)
-        if len_data < 5:
-            return incomplete_data("decoding length for a binary")
-        len_expected = util.u32(data, 1) + 5
-        if len_expected > len_data:
-            return incomplete_data("decoding data for a binary")
-
-        # Returned as Python `bytes`
-        return data[5:len_expected], data[len_expected:]
-
-    if tag == TAG_BIT_BINARY_EXT:
-        len_data = len(data)
-        if len_data < 6:
-            return incomplete_data("decoding length for a bit-binary")
-        size = util.u32(data, 1)
-        len_expected = size + 6
-        bits = data[5]
-        _check_bits(size, bits)
-        if len_expected > len_data:
-            return incomplete_data("decoding data for a bit-binary")
-        value = data[6:len_expected]
-        if bits == 8:
-            # A whole last byte: the term is a binary (as OTP decodes it).
-            return value, data[len_expected:]
-        return dec.bitstring(_mask_last_byte(value, bits), bits), data[len_expected:]
-
-    if tag == TAG_NEW_FLOAT_EXT:
-        (result_f,) = struct.unpack(">d", data[1:9])
-        return result_f, data[9:]
-
-    if tag == TAG_SMALL_BIG_EXT:
-        nbytes = data[1]
-        # Data is encoded little-endian as bytes (least significant first)
-        in_bytes = data[3 : (3 + nbytes)]
-        # NOTE: int.from_bytes is Python 3.2+
-        result_bi = int.from_bytes(in_bytes, byteorder="little")
-        if data[2] != 0:
-            result_bi = -result_bi
-        return result_bi, data[3 + nbytes :]
-
-    if tag == TAG_LARGE_BIG_EXT:
-        nbytes = util.u32(data, 1)
-        # Data is encoded little-endian as bytes (least significant first)
-        in_bytes = data[6 : (6 + nbytes)]
-        # NOTE: int.from_bytes is Python 3.2+
-        result_lbi = int.from_bytes(in_bytes, byteorder="little")
-        if data[5] != 0:
-            result_lbi = -result_lbi
-        return result_lbi, data[6 + nbytes :]
-
-    if tag == TAG_NEW_FUN_EXT:
-        # size = util.u32(data, 1)
-        arity = data[5]
-        uniq = data[6:22]
-        index = util.u32(data, 22)
-        num_free = util.u32(data, 26)
-        mod, tail = dec.decode(data[30:])
-        old_index, tail = dec.decode(tail)
-        old_uniq, tail = dec.decode(tail)
-        pid3, tail = dec.decode(tail)
-
-        free_vars = []
-        while num_free > 0:
-            v, tail = dec.decode(tail)
-            free_vars.append(v)
-            num_free -= 1
-
-        return (
-            Fun(
-                mod=mod,
-                arity=arity,
-                pid=pid3,
-                index=index,
-                uniq=uniq,
-                old_index=old_index,
-                old_uniq=old_uniq,
-                free=free_vars,
-            ),
-            tail,
+        words = reader.u16()
+        node = _decode_node(reader)
+        creation = reader.u8()
+        return Reference(
+            node_name=node, creation=creation, refid=reader.read(4 * words)
         )
 
-    raise PyCodecError("Unknown tag %d" % data[0])
+    if tag == TAG_NEWER_REF_EXT:
+        words = reader.u16()
+        node = _decode_node(reader)
+        creation = reader.u32()
+        return Reference(
+            node_name=node, creation=creation, refid=reader.read(4 * words)
+        )
+
+    if tag == TAG_MAP_EXT:
+        return _decode_map(dec, reader)
+
+    if tag == TAG_BINARY_EXT:
+        # Returned as Python `bytes`
+        return reader.read(reader.u32())
+
+    if tag == TAG_BIT_BINARY_EXT:
+        size = reader.u32()
+        bits = reader.u8()
+        _check_bits(size, bits)
+        value = reader.read(size)
+        if bits == 8:
+            # A whole last byte: the term is a binary (as OTP decodes it).
+            return value
+        return dec.bitstring(_mask_last_byte(value, bits), bits)
+
+    if tag == TAG_NEW_FLOAT_EXT:
+        return reader.f64()
+
+    if tag in (TAG_SMALL_BIG_EXT, TAG_LARGE_BIG_EXT):
+        nbytes = reader.u8() if tag == TAG_SMALL_BIG_EXT else reader.u32()
+        sign = reader.u8()
+        # Data is encoded little-endian as bytes (least significant first)
+        result = int.from_bytes(reader.read(nbytes), byteorder="little")
+        return -result if sign != 0 else result
+
+    if tag == TAG_NEW_FUN_EXT:
+        return _decode_fun(dec, reader)
+
+    raise PyCodecError("Unknown tag %d" % tag)
 
 
 def _pack_list(lst: list[Any], encode_hook: EncodeHookType) -> bytes:

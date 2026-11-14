@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use flate2::bufread::ZlibDecoder;
+use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyBytes, PyDict, PyInt, PyList, PyTuple};
 use pyo3::IntoPyObjectExt;
@@ -389,7 +390,13 @@ impl<'py> Decoder<'py> {
         for _i in 0..arity {
             let py_key = self.decode(reader)?;
             let py_val = self.decode(reader)?;
-            result.set_item(py_key, py_val)?;
+            if let Err(error) = result.set_item(&py_key, py_val) {
+                if !error.is_instance_of::<PyTypeError>(self.py) {
+                    return Err(error.into());
+                }
+                let type_name = py_key.get_type().name()?.to_string();
+                return Err(CodecError::UnhashableKey { type_name, error });
+            }
         }
 
         Ok(result.into_any())

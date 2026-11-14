@@ -19,6 +19,10 @@ from term.basetypes import BaseTerm
 
 NIL: List[Any] = []
 
+# Default of ImproperList's tail argument: tells "omitted" apart from a tail
+# that is falsy (0, None, "") but still a tail.
+_NO_TAIL: Any = object()
+
 
 class ImproperList(List, BaseTerm):
     """A simple data holder used to pass improper lists back to Erlang.
@@ -27,13 +31,14 @@ class ImproperList(List, BaseTerm):
     and very likely you will not ever need it.
     """
 
-    def __init__(self, elements: list[Any], tail: Any = None) -> None:
+    def __init__(self, elements: list[Any], tail: Any = _NO_TAIL) -> None:
         """tail is optional, if omitted, the last element in elements
         `elements[-1]` will be considered to be the tail. if it's
-        present it will be appended to the list so it becomes `self[-1]`
+        present (whatever its value, 0 and None included) it will be
+        appended to the list so it becomes `self[-1]`
         """
         super().__init__(elements)
-        if tail:
+        if tail is not _NO_TAIL:
             self.append(tail)
 
     @property

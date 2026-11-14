@@ -75,11 +75,7 @@ NOT_DECODED_BY: dict[tuple[str, str], str] = {}
 REJECTED = {"map_list_key", "map_map_key"}
 
 # Rejections that one codec gets wrong yet: (name, codec id) -> plan step.
-REJECTED_WRONGLY_BY: dict[tuple[str, str], str] = {
-    # The Python codec lets the dict's TypeError escape.
-    ("map_list_key", "py"): "TERM-08",
-    ("map_map_key", "py"): "TERM-08",
-}
+REJECTED_WRONGLY_BY: dict[tuple[str, str], str] = {}
 
 _FIX_NODE = Atom("fix@host")
 

@@ -27,3 +27,12 @@
   bitstring with 0 or more than 8 bits in the last byte, or with no bytes;
   8 bits make a plain binary (`bytes`), and unused low bits of the last byte
   are cleared on decode and encode, as OTP does.
+- Decoding malformed input raises only `PyCodecError` in both codecs. The
+  Python codec raised `IndexError`, `struct.error`, `UnicodeDecodeError`,
+  `AssertionError`, `TypeError` or `zlib.error`, or silently decoded short
+  reads. An exception raised by `decode_hook` or `atom_call`, and the
+  `TypeError` of an unhashable map key, become the `__cause__` of the
+  `PyCodecError` (the native codec used to drop them); the message of the
+  latter names the key's type.
+- `ImproperList(elements, tail)` keeps a falsy tail (`0`, `None`, `""`);
+  `[1|0]` and `[1|undefined]` decoded as lists with the wrong tail.

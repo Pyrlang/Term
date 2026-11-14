@@ -1359,6 +1359,52 @@ def test_node_names_ignore_options(codec: ModuleType) -> None:
             assert value.node_name_ == "fix@host"
 
 
+# An exception type only the tests below raise.
+class _HookFailed(Exception):
+    pass
+
+
+def _fail(value: Any) -> Any:
+    raise _HookFailed("no %r" % (value,))
+
+
+@pytest.mark.parametrize(
+    "options",
+    [{"decode_hook": {"str": _fail}}, {"atom_call": _fail}],
+    ids=["decode_hook", "atom_call"],
+)
+def test_callable_raising(codec: ModuleType, options: dict[str, Any]) -> None:
+    """A raising option callable gives PyCodecError; the user's exception is
+    its ``__cause__`` (TERM-08)."""
+    with pytest.raises(codec.PyCodecError) as info:
+        codec.binary_to_term(NESTED, options)
+    assert isinstance(info.value.__cause__, _HookFailed)
+
+
+@pytest.mark.parametrize(
+    "name, key_type", [("map_list_key", "list"), ("map_map_key", "dict")]
+)
+def test_unhashable_map_key(codec: ModuleType, name: str, key_type: str) -> None:
+    """A map key Python cannot hash gives PyCodecError naming the key's type,
+    with the dict's TypeError as ``__cause__`` (TERM-08)."""
+    data = (FIXTURE_DIR / (name + ".etf")).read_bytes()
+    with pytest.raises(codec.PyCodecError, match="key of type %s" % key_type) as info:
+        codec.binary_to_term(data, None)
+    assert isinstance(info.value.__cause__, TypeError)
+
+
+def test_improper_list_falsy_tail(codec: ModuleType) -> None:
+    """[1|0] and [1|undefined] as OTP 29 writes them keep their tails."""
+    zero = bytes([131, 108, 0, 0, 0, 1, 97, 1, 97, 0])
+    undefined = bytes([131, 108, 0, 0, 0, 1, 97, 1, 119, 9]) + b"undefined"
+    for data, tail in ((zero, 0), (undefined, None)):
+        value, rest = codec.binary_to_term(data, None)
+        assert rest == b""
+        assert isinstance(value, ImproperList)
+        assert value == ImproperList([1], tail)
+        assert codec.term_to_binary(value, None) == data
+
+
 @pytest.mark.parametrize(
     "options",
     [
