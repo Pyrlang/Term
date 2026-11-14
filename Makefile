@@ -20,10 +20,7 @@ clearterminal:
 
 .PHONY: test
 test: clearterminal
-	for f in $(shell ls test/*_test.py); do \
-		echo "RUNNING $$f"; \
-		$(PY) $$f || exit 1; \
-	done
+	$(PY) -m pytest test
 
 .PHONY: clearterminal dtest
 dtest: compile

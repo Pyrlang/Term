@@ -1,5 +1,6 @@
 /build
 /venv
+/.venv
 /target
 *.egg-info
 *.pyc
