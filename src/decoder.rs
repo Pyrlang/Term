@@ -297,14 +297,18 @@ impl<'py> Decoder<'py> {
         Ok(PyTuple::new(self.py, [py_bytes, py_bits])?.into_any())
     }
 
-    /// Given input _after_ string tag, parse remaining bytes as a UTF-8 string
-    /// (Latin-1 is correct; TERM-07 fixes this).
+    /// Given input _after_ string tag, parse remaining bytes: one character
+    /// (code point 0..255, so Latin-1) per byte.
     #[inline]
     fn parse_string(&self, reader: &mut Reader) -> CodecResult<Bound<'py, PyAny>> {
         let sz = reader.read_u16()? as usize;
         let arr = reader.read(sz)?;
         let result = match self.bytestring_repr {
-            ByteStringRepresentation::Str => str::from_utf8(arr)?.into_bound_py_any(self.py)?,
+            ByteStringRepresentation::Str => arr
+                .iter()
+                .map(|&b| char::from(b))
+                .collect::<String>()
+                .into_bound_py_any(self.py)?,
             ByteStringRepresentation::Bytes => PyBytes::new(self.py, arr).into_any(),
             ByteStringRepresentation::IntList => {
                 PyList::new(self.py, arr.iter().copied())?.into_any()

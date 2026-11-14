@@ -78,7 +78,10 @@ impl<'py> Encoder<'py> {
             }
             "list" => {
                 let as_list = term.cast::<PyList>()?;
-                self.write_list_no_tail(as_list)?;
+                // `[]` is NIL_EXT alone, as OTP writes it
+                if !as_list.is_empty() {
+                    self.write_list_no_tail(as_list)?;
+                }
                 self.data.push(consts::TAG_NIL_EXT);
                 Ok(())
             }
@@ -109,7 +112,10 @@ impl<'py> Encoder<'py> {
                 let elements0 = term.getattr("_elements")?;
                 let elements = elements0.cast::<PyList>()?;
                 let tail = term.getattr("_tail")?;
-                self.write_list_no_tail(elements)?;
+                // `[... | T]` with no elements is `T` itself
+                if !elements.is_empty() {
+                    self.write_list_no_tail(elements)?;
+                }
                 self.encode(&tail)
             }
             "Pid" => self.write_pid(term),
@@ -165,7 +171,8 @@ impl<'py> Encoder<'py> {
     fn write_list_no_tail(&mut self, list: &Bound<'py, PyList>) -> CodecResult<()> {
         let size = list.len();
         self.data.push(consts::TAG_LIST_EXT);
-        self.data.push_u32(size as u32);
+        self.data
+            .push_u32(u32::try_from(size).map_err(|_| CodecError::TooLong { size })?);
         for i in 0..size {
             let item = list.get_item(i)?;
             self.encode(&item)?;
@@ -173,16 +180,17 @@ impl<'py> Encoder<'py> {
         Ok(())
     }
 
-    /// Writes a tuple. A 255-element tuple goes out as LARGE_TUPLE_EXT (TERM-07).
+    /// Writes a tuple: SMALL_TUPLE_EXT up to 255 elements, else LARGE_TUPLE_EXT.
     #[inline]
     fn write_tuple(&mut self, tup: &Bound<'py, PyTuple>) -> CodecResult<()> {
         let size = tup.len();
-        if size < u8::MAX as usize {
+        if let Ok(small) = u8::try_from(size) {
             self.data.push(consts::TAG_SMALL_TUPLE_EXT);
-            self.data.push(size as u8);
+            self.data.push(small);
         } else {
             self.data.push(consts::TAG_LARGE_TUPLE_EXT);
-            self.data.push_u32(size as u32);
+            self.data
+                .push_u32(u32::try_from(size).map_err(|_| CodecError::TooLong { size })?);
         }
 
         for i in 0..size {
@@ -209,56 +217,51 @@ impl<'py> Encoder<'py> {
         Ok(())
     }
 
-    /// Writes an integer. `-2^31` goes out as a bignum and `2^31..2^32-1`
-    /// likewise (TERM-07).
+    /// Writes an integer: SMALL_INTEGER_EXT for 0..255, INTEGER_EXT for a
+    /// signed 32-bit value, otherwise a bignum.
     #[inline]
     fn write_int(&mut self, val: &Bound<'py, PyAny>) -> CodecResult<()> {
-        let size: u64 = val.call_method0("bit_length")?.extract()?;
-        let size: u32 = (size / 8 + 1) as u32;
-        if size <= 4 {
-            let v: i64 = val.extract()?;
-            self.write_4byte_int(v)
-        } else {
-            self.write_arbitrary_int(val, size)
+        match val.extract::<i64>() {
+            Ok(v) => {
+                self.write_i64(v);
+                Ok(())
+            }
+            // Does not fit 64 bits: let Python produce the magnitude bytes
+            Err(_) => self.write_py_bignum(val),
         }
     }
 
-    fn write_arbitrary_int(&mut self, val: &Bound<'py, PyAny>, size: u32) -> CodecResult<()> {
-        if size < 256 {
-            self.data.push(consts::TAG_SMALL_BIG_EXT);
-            self.data.push(size as u8);
-        } else {
-            self.data.push(consts::TAG_LARGE_BIG_EXT);
-            self.data.push_u32(size);
-        }
-
-        let ltz: bool = val.lt(0)?;
-        // Write the sign byte, then the magnitude as little-endian bytes
-        let magnitude = if ltz {
-            self.data.push(1_u8);
-            val.mul(-1)?
-        } else {
-            self.data.push(0_u8);
-            val.clone()
-        };
-        let b = magnitude.call_method1("to_bytes", (size, "little"))?;
-        let b = b.cast::<PyBytes>()?;
-        self.data.extend_from_slice(b.as_bytes());
-        Ok(())
-    }
-
-    #[inline]
-    fn write_4byte_int(&mut self, val: i64) -> CodecResult<()> {
-        if (0..=u8::MAX as i64).contains(&val) {
+    fn write_i64(&mut self, val: i64) {
+        if let Ok(small) = u8::try_from(val) {
             self.data.push(consts::TAG_SMALL_UINT);
-            self.data.push(val as u8);
-        } else if (i32::MIN as i64..=i32::MAX as i64).contains(&val) {
+            self.data.push(small);
+        } else if let Ok(v32) = i32::try_from(val) {
             self.data.push(consts::TAG_INT);
-            self.data.push_i32(val as i32);
+            self.data.push_i32(v32);
         } else {
-            return Err(CodecError::IntegerEncodingRange { i: val });
+            self.data
+                .extend(small_big_bytes(val.unsigned_abs(), val < 0));
         }
+    }
 
+    /// A bignum beyond 64 bits: SMALL_BIG_EXT up to 255 magnitude bytes, else
+    /// LARGE_BIG_EXT; little-endian magnitude without leading zero bytes.
+    fn write_py_bignum(&mut self, val: &Bound<'py, PyAny>) -> CodecResult<()> {
+        let negative: bool = val.lt(0)?;
+        let magnitude = if negative { val.neg()? } else { val.clone() };
+        let bits: u64 = magnitude.call_method0("bit_length")?.extract()?;
+        let size = bits.div_ceil(8);
+        if let Ok(small) = u8::try_from(size) {
+            self.data.push(consts::TAG_SMALL_BIG_EXT);
+            self.data.push(small);
+        } else {
+            let large = u32::try_from(size).map_err(|_| CodecError::IntegerTooLarge)?;
+            self.data.push(consts::TAG_LARGE_BIG_EXT);
+            self.data.push_u32(large);
+        }
+        self.data.push(u8::from(negative));
+        let b = magnitude.call_method1("to_bytes", (size, "little"))?;
+        self.data.extend_from_slice(b.cast::<PyBytes>()?.as_bytes());
         Ok(())
     }
 
@@ -298,31 +301,37 @@ impl<'py> Encoder<'py> {
         Ok(())
     }
 
-    /// Encode a string. STRING_EXT carries UTF-8 bytes here, which corrupts
-    /// code points 128..255 (TERM-07).
+    /// Encode a string, which is a list of code points: STRING_EXT (one
+    /// Latin-1 byte per character) when every code point is below 256 and
+    /// there are at most 65535 of them, else LIST_EXT of integers; `""` is
+    /// NIL_EXT.
     #[inline]
     fn write_str(&mut self, py_str: &Bound<'py, PyString>) -> CodecResult<()> {
         let text = py_str.to_cow()?;
-        let byte_array: &[u8] = text.as_bytes();
-        let str_byte_length: usize = byte_array.len();
-        let can_be_encoded_as_bytes = can_be_encoded_as_byte_string(&text);
-
-        if str_byte_length <= u8::MAX as usize && can_be_encoded_as_bytes {
-            // Create an optimised byte-array structure and push bytes
-            self.data.push(consts::TAG_STRING_EXT);
-            self.data.push_u16(str_byte_length as u16); // 16bit length
-            self.data.extend_from_slice(byte_array); // string content
-        } else {
-            // Create a list structure and push each codepoint as an integer
-            self.data.push(consts::TAG_LIST_EXT);
-            let chars_count = text.chars().count();
-            self.data.push_u32(chars_count as u32); // chars, not bytes!
-            for ch in text.chars() {
-                self.write_4byte_int(ch as i64)?
-            }
-            self.data.push(consts::TAG_NIL_EXT) // list terminator
+        if text.is_empty() {
+            self.data.push(consts::TAG_NIL_EXT);
+            return Ok(());
         }
+        let size = text.chars().count();
+        let latin1 = text.chars().all(|ch| u8::try_from(ch).is_ok());
 
+        match u16::try_from(size) {
+            Ok(short) if latin1 => {
+                self.data.push(consts::TAG_STRING_EXT);
+                self.data.push_u16(short);
+                self.data
+                    .extend(text.chars().filter_map(|ch| u8::try_from(ch).ok()));
+            }
+            _ => {
+                self.data.push(consts::TAG_LIST_EXT);
+                self.data
+                    .push_u32(u32::try_from(size).map_err(|_| CodecError::TooLong { size })?);
+                for ch in text.chars() {
+                    self.write_i64(i64::from(u32::from(ch)));
+                }
+                self.data.push(consts::TAG_NIL_EXT);
+            }
+        }
         Ok(())
     }
 
@@ -391,16 +400,32 @@ impl<'py> Encoder<'py> {
     }
 } // end impl
 
-/// Checks first 65535 characters whether they are single-byte and are not
-/// extended code points
-fn can_be_encoded_as_byte_string(s: &str) -> bool {
-    for (i, ch) in s.char_indices() {
-        if i > u16::MAX as usize {
-            return false; // too long, so result is false
-        }
-        if ch as u32 > u8::MAX as u32 {
-            return false; // is a unicode codepoint with value larger than 255
-        }
+/// SMALL_BIG_EXT of a magnitude that fits 64 bits: tag, byte count, sign,
+/// then the magnitude little-endian without leading zero bytes.
+fn small_big_bytes(magnitude: u64, negative: bool) -> Vec<u8> {
+    let le = magnitude.to_le_bytes();
+    let n = le.len() - (magnitude.leading_zeros() / 8) as usize;
+    let mut out = vec![consts::TAG_SMALL_BIG_EXT, n as u8, u8::from(negative)];
+    out.extend(le.iter().take(n));
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::small_big_bytes;
+
+    #[test]
+    fn small_big_has_no_leading_zero_bytes() {
+        // 2^31 and 2^32-1 take 4 bytes, 2^32 five, as OTP writes them.
+        assert_eq!(small_big_bytes(1 << 31, false), [110, 4, 0, 0, 0, 0, 128]);
+        assert_eq!(
+            small_big_bytes(u32::MAX.into(), true),
+            [110, 4, 1, 255, 255, 255, 255]
+        );
+        assert_eq!(small_big_bytes(1 << 32, false), [110, 5, 0, 0, 0, 0, 0, 1]);
+        assert_eq!(
+            small_big_bytes(u64::MAX, false),
+            [110, 8, 0, 255, 255, 255, 255, 255, 255, 255, 255]
+        );
     }
-    true // will fit in a 255-byte latin-1 string
 }

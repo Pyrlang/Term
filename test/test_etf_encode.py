@@ -72,11 +72,11 @@ def test_encode_str(codec: ModuleType) -> None:
 
 
 def test_encode_str_unicode(codec: ModuleType) -> None:
-    # Unicode value for <A with RING ABOVE> is still within byte range
-    # so this will produce a list of small ints
+    # <A with RING ABOVE> is code point 229, within byte range, so STRING_EXT
+    # holds it as one Latin-1 byte; OTP 29 writes <<131,107,0,5,"hall",229>>.
     unicode_example1 = bytes(
-        [py_impl.ETF_VERSION_TAG, py_impl.TAG_STRING_EXT, 0, 6]
-    ) + "hallå".encode("utf8")
+        [py_impl.ETF_VERSION_TAG, py_impl.TAG_STRING_EXT, 0, 5]
+    ) + "hallå".encode("latin-1")
 
     # unicode but codepoints <= 255
     b1 = codec.term_to_binary("hallå", None)

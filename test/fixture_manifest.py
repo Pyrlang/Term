@@ -32,25 +32,17 @@ DECODE_BLOCKED: dict[str, str] = {
 }
 
 # Features that one codec does not decode yet: (feature, codec id) -> step.
-DECODE_BLOCKED_BY: dict[tuple[str, str], str] = {
-    # Native decodes STRING_EXT as UTF-8 and fails on bytes >= 128.
-    ("str_latin1", "native"): "TERM-07",
-}
+DECODE_BLOCKED_BY: dict[tuple[str, str], str] = {}
 
 # Features that decode but do not come back as the same term after
 # decode -> encode (in addition to everything that does not decode).
 ROUNDTRIP_BLOCKED: dict[str, str] = {
-    # Both encoders write the decoded str as UTF-8 into STRING_EXT.
-    "str_latin1": "TERM-07",
     "local_fun": "TERM-13",
     # Bitstrings decode to a (bytes, bits) tuple, which encodes as a tuple.
     "bitstring": "TERM-20",
 }
 
-ROUNDTRIP_BLOCKED_BY: dict[tuple[str, str], str] = {
-    # Python packs these with struct ">i" and raises struct.error.
-    ("int_bits_32", "py"): "TERM-07",
-}
+ROUNDTRIP_BLOCKED_BY: dict[tuple[str, str], str] = {}
 
 # Terms with no Python value (a map key that would be a list or a dict):
 # decoding must raise PyCodecError.

@@ -5,12 +5,14 @@ int_256	29	stable	256	[]
 int_neg_1	29	stable	-1	[]	
 int_2p31_minus_1	29	stable	1 bsl 31 - 1	[]	
 int_neg_2p31	29	stable	-(1 bsl 31)	[]	
+int_neg_2p31_minus_1	29	stable	-(1 bsl 31) - 1	[]	int_bits_32
 int_2p31	29	stable	1 bsl 31	[]	int_bits_32
 int_2p32_minus_1	29	stable	1 bsl 32 - 1	[]	int_bits_32
 int_2p32	29	stable	1 bsl 32	[]	
 int_2p64	29	stable	1 bsl 64	[]	
 int_neg_2p64	29	stable	-(1 bsl 64)	[]	
 int_2p2039	29	stable	1 bsl 2039	[]	
+int_2p2040_minus_1	29	stable	1 bsl 2040 - 1	[]	
 int_2p2040	29	stable	1 bsl 2040	[]	
 float_0	29	stable	0.0	[]	
 float_neg_0	29	stable	-0.0	[]	

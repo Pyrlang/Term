@@ -286,6 +286,7 @@ integers() ->
      ?F(int_neg_1, stable, -1),
      ?F(int_2p31_minus_1, stable, (1 bsl 31) - 1),
      ?F(int_neg_2p31, stable, -(1 bsl 31)),
+     ?F(int_neg_2p31_minus_1, stable, -(1 bsl 31) - 1),
      ?F(int_2p31, stable, 1 bsl 31),
      ?F(int_2p32_minus_1, stable, (1 bsl 32) - 1),
      ?F(int_2p32, stable, 1 bsl 32),
@@ -293,6 +294,7 @@ integers() ->
      ?F(int_neg_2p64, stable, -(1 bsl 64)),
      %% 2^2039 needs 255 bytes (SMALL_BIG_EXT), 2^2040 needs 256 (LARGE_BIG_EXT).
      ?F(int_2p2039, stable, 1 bsl 2039),
+     ?F(int_2p2040_minus_1, stable, (1 bsl 2040) - 1),
      ?F(int_2p2040, stable, 1 bsl 2040)].
 
 floats() ->

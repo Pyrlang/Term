@@ -68,10 +68,7 @@ NOT_DECODED: dict[str, str] = {
 }
 
 # Fixtures that one codec does not decode yet: (name, codec id) -> plan step.
-NOT_DECODED_BY: dict[tuple[str, str], str] = {
-    # Native decodes STRING_EXT as UTF-8 and fails on bytes >= 128.
-    ("str_latin1", "native"): "TERM-07",
-}
+NOT_DECODED_BY: dict[tuple[str, str], str] = {}
 
 # Terms with no Python value (a map key that a dict cannot hold): decoding
 # must raise PyCodecError.
@@ -99,12 +96,14 @@ EXPECTED: dict[str, Any] = {
     "int_neg_1": -1,
     "int_2p31_minus_1": 2**31 - 1,
     "int_neg_2p31": -(2**31),
+    "int_neg_2p31_minus_1": -(2**31) - 1,
     "int_2p31": 2**31,
     "int_2p32_minus_1": 2**32 - 1,
     "int_2p32": 2**32,
     "int_2p64": 2**64,
     "int_neg_2p64": -(2**64),
     "int_2p2039": 2**2039,
+    "int_2p2040_minus_1": 2**2040 - 1,
     "int_2p2040": 2**2040,
     "float_0": 0.0,
     "float_neg_0": -0.0,
@@ -170,21 +169,17 @@ ENCODE_FROM: dict[str, Any] = {
 ENCODE_FIXTURES = [f for f in FIXTURES if f.name in EXPECTED and f.options == "[]"]
 
 # Fixtures that neither encoder reproduces yet, and the plan step that fixes them.
-NOT_ENCODED: dict[str, str] = {
-    "int_2p31": "TERM-07",
-    "int_2p32_minus_1": "TERM-07",
-    "int_2p2039": "TERM-07",
-    "str_latin1": "TERM-07",
-}
+NOT_ENCODED: dict[str, str] = {}
 
 # Fixtures that one encoder does not reproduce yet: (name, codec id) -> step.
-NOT_ENCODED_BY: dict[tuple[str, str], str] = {
-    ("int_neg_2p31", "native"): "TERM-07",
-    # Native writes [] as a zero-length LIST_EXT instead of NIL_EXT.
-    ("str_empty", "native"): "TERM-07",
-    ("list_nested", "native"): "TERM-07",
-    ("str_65535", "native"): "TERM-07",
-    ("tuple_255", "native"): "TERM-07",
+NOT_ENCODED_BY: dict[tuple[str, str], str] = {}
+
+# More values that must encode to a fixture's bytes: a Python str is a list
+# of code points, so these give the same bytes as the list in EXPECTED.
+ENCODE_ALSO: dict[str, Any] = {
+    "str_empty": "",
+    "str_65536": "a" * 65536,
+    "str_wide": "aĀb",
 }
 
 
@@ -229,6 +224,7 @@ def test_expected_names_exist() -> None:
     assert named <= names
     encoded = {f.name for f in ENCODE_FIXTURES}
     named_enc = set(ENCODE_FROM) | set(NOT_ENCODED) | {n for n, _ in NOT_ENCODED_BY}
+    named_enc |= set(ENCODE_ALSO)
     assert named_enc <= encoded
 
 
@@ -272,3 +268,9 @@ def test_encode_fixture(
     value = ENCODE_FROM.get(name, EXPECTED[name])
     expected = (FIXTURE_DIR / (name + ".etf")).read_bytes()
     assert codec.term_to_binary(value, None) == expected
+
+
+@pytest.mark.parametrize("name", list(ENCODE_ALSO))
+def test_encode_also(name: str, codec: ModuleType) -> None:
+    expected = (FIXTURE_DIR / (name + ".etf")).read_bytes()
+    assert codec.term_to_binary(ENCODE_ALSO[name], None) == expected

@@ -515,26 +515,23 @@ def _decode_term(dec: _Decoder, data: bytes) -> tuple[Any, bytes]:
     raise PyCodecError("Unknown tag %d" % data[0])
 
 
-def _pack_list(lst: list[Any], tail: Any, encode_hook: EncodeHookType) -> bytes:
-    if len(lst) == 0:
+def _pack_list(lst: list[Any], encode_hook: EncodeHookType) -> bytes:
+    """A proper list; ``[]`` is ``NIL_EXT`` alone, as OTP writes it."""
+    if not lst:
         return bytes([TAG_NIL_EXT])
-
-    data = b""
-    for item in lst:
-        data += term_to_binary_2(item, encode_hook)
-
-    tail = term_to_binary_2(tail, encode_hook)
-    return bytes([TAG_LIST_EXT]) + util.to_u32(len(lst)) + data + tail
+    data = b"".join(term_to_binary_2(item, encode_hook) for item in lst)
+    return bytes([TAG_LIST_EXT]) + util.to_u32(len(lst)) + data + bytes([TAG_NIL_EXT])
 
 
-def _pack_string(val: str) -> bytes:
-    if len(val) == 0:
-        return _pack_list([], [], encode_hook=None)
-
-    # Save time here and don't check list elements to fit into a byte
-    # Otherwise TODO: if all elements were bytes - we could use TAG_STRING_EXT
-
-    return _pack_list(list(val), [], encode_hook=None)
+def _pack_improper_list(
+    lst: list[Any], tail: Any, encode_hook: EncodeHookType
+) -> bytes:
+    """``[lst... | tail]``; with no elements that is ``tail`` itself."""
+    if not lst:
+        return term_to_binary_2(tail, encode_hook)
+    data = b"".join(term_to_binary_2(item, encode_hook) for item in lst)
+    data += term_to_binary_2(tail, encode_hook)
+    return bytes([TAG_LIST_EXT]) + util.to_u32(len(lst)) + data
 
 
 def _pack_tuple(val: tuple[Any, ...], encode_hook: EncodeHookType) -> bytes:
@@ -557,24 +554,31 @@ def _pack_dict(val: dict[Any, Any], encode_hook: EncodeHookType) -> bytes:
     return data
 
 
+# Range of INTEGER_EXT: a signed 32-bit integer.
+_INT_MIN = -(2**31)
+_INT_MAX = 2**31 - 1
+
+# Most magnitude bytes LARGE_BIG_EXT can declare.
+_BIG_MAX_BYTES = 2**32 - 1
+
+
 def _pack_int(val: int) -> bytes:
+    """``SMALL_INTEGER_EXT`` for 0..255, ``INTEGER_EXT`` for signed 32 bits,
+    otherwise a bignum: little-endian magnitude without leading zero bytes."""
     if 0 <= val < 256:
         return bytes([TAG_SMALL_INT, val])
-    size = val.bit_length()
-    if size <= 32:
+    if _INT_MIN <= val <= _INT_MAX:
         return bytes([TAG_INT]) + util.to_i32(val)
-    # we get here we're packing smal or large big
-    sign = 0 if 0 <= val else 1
-    if sign:
-        val *= -1  # switch to positive value
-    size = int(size / 8) + 1
+    sign = 1 if val < 0 else 0
+    magnitude = -val if sign else val
+    size = (magnitude.bit_length() + 7) // 8
     if size < 256:
         hdr = bytes([TAG_SMALL_BIG_EXT, size, sign])
-    else:
+    elif size <= _BIG_MAX_BYTES:
         hdr = bytes([TAG_LARGE_BIG_EXT]) + util.to_u32(size) + bytes([sign])
-
-    data = val.to_bytes(size, "little")
-    return hdr + data
+    else:
+        raise PyCodecError("Integer is too large for LARGE_BIG_EXT")
+    return hdr + magnitude.to_bytes(size, "little")
 
 
 # TODO: maybe move this into atom class
@@ -661,28 +665,27 @@ def generic_serialize_object(
     return (bytes(object_name, "latin1"), fields), cycle_detect
 
 
+# Most characters STRING_EXT can hold (a 16-bit length).
+_STRING_EXT_MAX = 65535
+
+
 def _pack_str(val: str) -> bytes:
-    str_bytes = bytes(val, "utf8")
-    len_str_bytes = len(str_bytes)
-    len_val = len(val)
-
-    if _can_be_a_bytestring(val) and len_str_bytes <= 65535:
-        # same length as byte length
-        header = bytes([TAG_STRING_EXT]) + util.to_u16(len_str_bytes)
-        return header + str_bytes
-    else:
-        # contains unicode characters! must be encoded as a list of ints
-        header = bytes([TAG_LIST_EXT]) + util.to_u32(len_val)
-        elements = [_pack_int(ord(ch)) for ch in val]
-        return header + b"".join(elements) + bytes([TAG_NIL_EXT])
-
-
-def _can_be_a_bytestring(val: str) -> bool:
-    i = 0
-    for c in val:
-        if i > 255 or ord(c) > 255:
-            return False
-    return True
+    """A string is a list of code points: ``STRING_EXT`` (one Latin-1 byte
+    per character) when every code point is below 256 and there are at most
+    65535 of them, else ``LIST_EXT`` of integers; ``""`` is ``NIL_EXT``."""
+    if not val:
+        return bytes([TAG_NIL_EXT])
+    if len(val) <= _STRING_EXT_MAX:
+        try:
+            latin1 = val.encode("latin-1")
+        except UnicodeEncodeError:
+            pass
+        else:
+            return bytes([TAG_STRING_EXT]) + util.to_u16(len(latin1)) + latin1
+    elements = b"".join(_pack_int(ord(ch)) for ch in val)
+    return (
+        bytes([TAG_LIST_EXT]) + util.to_u32(len(val)) + elements + bytes([TAG_NIL_EXT])
+    )
 
 
 def _pack_float(val: float) -> bytes:
@@ -741,7 +744,7 @@ def term_to_binary_2(val: Any, encode_hook: EncodeHookType) -> bytes:
         return _pack_atom("true") if val else _pack_atom("false")
 
     elif type_val == list:
-        return _pack_list(val, [], encode_hook)
+        return _pack_list(val, encode_hook)
 
     elif type_val == tuple:
         return _pack_tuple(val, encode_hook)
@@ -756,7 +759,7 @@ def term_to_binary_2(val: Any, encode_hook: EncodeHookType) -> bytes:
         return _pack_atom(val)
 
     elif isinstance(val, ImproperList):
-        return _pack_list(val._elements, val._tail, encode_hook)
+        return _pack_improper_list(val._elements, val._tail, encode_hook)
 
     elif isinstance(val, Pid):
         return _pack_pid(val)

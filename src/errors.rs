@@ -39,8 +39,12 @@ pub enum CodecError {
     NodeNotAnAtom { b: u8 },
     #[error("Bad options passed: {}", txt)]
     BadOptions { txt: String },
-    #[error("Integer {} is too large (> 32bit): big integers not impl", i)]
-    IntegerEncodingRange { i: i64 },
+    // More magnitude bytes than LARGE_BIG_EXT's 32-bit count can declare.
+    #[error("Integer is too large for LARGE_BIG_EXT")]
+    IntegerTooLarge,
+    // A list, string or tuple longer than its 32-bit length field.
+    #[error("{} elements do not fit a 32-bit length", size)]
+    TooLong { size: usize },
     #[error("Float value {} is not finite", f)]
     NonFiniteFloat { f: f64 },
     #[error("IOError")]

@@ -13,3 +13,11 @@
   an atom raises `PyCodecError`.
 - The native codec decodes a zero-length `LIST_EXT` with a tail `T` as `T`,
   like the Python codec and OTP.
+- Integers and strings encode as OTP writes them, in both codecs:
+  `INTEGER_EXT` for the whole signed 32-bit range (the Python codec raised
+  `struct.error` for 2^31..2^32-1, the native one wrote -2^31 as a bignum);
+  bignums without a leading zero byte; strings of code points 0..255 and at
+  most 65535 characters as Latin-1 `STRING_EXT` (both codecs wrote UTF-8
+  bytes, so "é" arrived as two characters); `""` and `[]` as `NIL_EXT`; a
+  255-element tuple as `SMALL_TUPLE_EXT` (native). The native decoder reads
+  `STRING_EXT` as Latin-1 (it failed on bytes >= 128).
