@@ -1,9 +1,12 @@
-"""Decode the golden fixtures that real OTP wrote (plan step TERM-03).
+"""Decode and encode the golden fixtures that real OTP wrote (plan step TERM-03).
 
 The fixtures in ``test/fixtures`` come from ``test/erl/gen_fixtures.erl``;
-``MANIFEST.tsv`` lists them. Every fixture is decoded by both codecs, must
-consume all its bytes, and, where ``EXPECTED`` defines the Python value,
-must decode to exactly that value (same types, same float sign).
+``MANIFEST.tsv`` lists them. Both codecs run every test:
+
+- decode: every fixture decodes, consumes all its bytes, and, where
+  ``EXPECTED`` defines the Python value, gives exactly that value (same
+  types, same float sign);
+- encode: every value in ``EXPECTED`` encodes to exactly OTP's bytes.
 """
 
 import struct
@@ -16,6 +19,7 @@ import pytest
 
 from term import py_codec_impl
 from term.atom import Atom
+from term.bitstring import BitString
 from term.list import ImproperList
 from term.pid import Pid
 from term.reference import Reference
@@ -73,6 +77,10 @@ REJECTED_WRONGLY_BY: dict[tuple[str, str], str] = {
 
 _FIX_NODE = Atom("fix@host")
 
+# Key order of fixture map_33 (more than 32 keys: OTP's internal hash order).
+_MAP_33_OTP_ORDER = [22, 26, 27, 5, 21, 30, 16, 3, 33, 14, 24, 17, 11, 6, 20, 28]
+_MAP_33_OTP_ORDER += [25, 1, 32, 15, 9, 23, 10, 8, 31, 7, 2, 13, 29, 19, 12, 4, 18]
+
 # Exact decoded values with the default options, for every fixture whose
 # Python representation is already defined.
 EXPECTED: dict[str, Any] = {
@@ -120,7 +128,9 @@ EXPECTED: dict[str, Any] = {
     "tuple_256": tuple(range(1, 257)),
     "map_0": {},
     "map_32": {k: k for k in range(1, 33)},
-    "map_33": {k: k for k in range(1, 34)},
+    # Keys in the order OTP 29 wrote this hash map, so that encoding the dict
+    # (which keeps insertion order) can reproduce OTP's bytes.
+    "map_33": {k: k for k in _MAP_33_OTP_ORDER},
     "bin_empty": b"",
     "bin_1_2_3": b"\x01\x02\x03",
     # Bitstrings decode to (bytes, bits in the last byte) until TERM-20.
@@ -134,6 +144,38 @@ EXPECTED: dict[str, Any] = {
     "ref_3_words": Reference(_FIX_NODE, 1, struct.pack(">3I", 1, 2, 3)),
     "ref_5_words": Reference(_FIX_NODE, 1, struct.pack(">5I", 1, 2, 3, 4, 5)),
     "ref_max_creation": Reference(_FIX_NODE, 0xFFFFFFFF, b"\xff" * 12),
+}
+
+# Values to encode where the decoded representation does not encode back to
+# the same term: a bitstring decodes to a tuple (until TERM-20), but only a
+# BitString encodes as BIT_BINARY_EXT.
+ENCODE_FROM: dict[str, Any] = {
+    "bits_1_1": BitString(b"\x80", 1),
+    "bits_5_7": BitString(b"\x0a", 7),
+    "bits_1_2_3_4": BitString(b"\x01\x02\x30", 4),
+}
+
+# Fixtures whose bytes the encoders are tested against: those with a defined
+# value, written without term_to_binary options. Our encoders offer no
+# {minor_version, N} or compressed output, so those fixtures are decode-only.
+ENCODE_FIXTURES = [f for f in FIXTURES if f.name in EXPECTED and f.options == "[]"]
+
+# Fixtures that neither encoder reproduces yet, and the plan step that fixes them.
+NOT_ENCODED: dict[str, str] = {
+    "int_2p31": "TERM-07",
+    "int_2p32_minus_1": "TERM-07",
+    "int_2p2039": "TERM-07",
+    "str_latin1": "TERM-07",
+}
+
+# Fixtures that one encoder does not reproduce yet: (name, codec id) -> step.
+NOT_ENCODED_BY: dict[tuple[str, str], str] = {
+    ("int_neg_2p31", "native"): "TERM-07",
+    # Native writes [] as a zero-length LIST_EXT instead of NIL_EXT.
+    ("str_empty", "native"): "TERM-07",
+    ("list_nested", "native"): "TERM-07",
+    ("str_65535", "native"): "TERM-07",
+    ("tuple_255", "native"): "TERM-07",
 }
 
 
@@ -176,6 +218,9 @@ def test_expected_names_exist() -> None:
     named = set(EXPECTED) | set(NOT_DECODED) | REJECTED
     named |= {n for n, _ in NOT_DECODED_BY} | {n for n, _ in REJECTED_WRONGLY_BY}
     assert named <= names
+    encoded = {f.name for f in ENCODE_FIXTURES}
+    named_enc = set(ENCODE_FROM) | set(NOT_ENCODED) | {n for n, _ in NOT_ENCODED_BY}
+    assert named_enc <= encoded
 
 
 @pytest.mark.parametrize("fixture", FIXTURES, ids=[f.name for f in FIXTURES])
@@ -202,3 +247,19 @@ def test_decode_fixture(
     assert tail == b""
     if name in EXPECTED:
         _assert_same(value, EXPECTED[name])
+
+
+@pytest.mark.parametrize(
+    "fixture", ENCODE_FIXTURES, ids=[f.name for f in ENCODE_FIXTURES]
+)
+def test_encode_fixture(
+    fixture: _Fixture, codec: ModuleType, request: pytest.FixtureRequest
+) -> None:
+    name = fixture.name
+    step = NOT_ENCODED.get(name) or NOT_ENCODED_BY.get((name, _codec_id(codec)))
+    if step is not None:
+        request.applymarker(pytest.mark.xfail(strict=True, reason=step))
+
+    value = ENCODE_FROM.get(name, EXPECTED[name])
+    expected = (FIXTURE_DIR / (name + ".etf")).read_bytes()
+    assert codec.term_to_binary(value, None) == expected
