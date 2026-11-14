@@ -16,6 +16,7 @@ use flate2::bufread::ZlibDecoder;
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyBytes, PyDict, PyInt, PyList, PyTuple};
 use pyo3::IntoPyObjectExt;
+use std::borrow::Cow;
 use std::io::Read;
 use std::str;
 
@@ -32,7 +33,11 @@ pub struct Decoder<'py> {
     bytestring_repr: ByteStringRepresentation,
 
     pub decode_hook: Bound<'py, PyDict>,
+    // The "atom_call" option: builds every atom from its text when set.
+    atom_call: Option<Bound<'py, PyAny>>,
     cached_atom_pyclass: Option<Bound<'py, PyAny>>,
+    // term.atom.Atom, for node names whatever the "atom" option says.
+    cached_node_atom_pyclass: Option<Bound<'py, PyAny>>,
     cached_pid_pyclass: Option<Bound<'py, PyAny>>,
     cached_ref_pyclass: Option<Bound<'py, PyAny>>,
     cached_fun_pyclass: Option<Bound<'py, PyAny>>,
@@ -61,11 +66,27 @@ impl<'py> Decoder<'py> {
         // If opts is None, make it empty Dict, otherwise take it as PyDict
         let opts1 = helpers::maybe_dict(opts)?;
         let aopt = helpers::get_atom_opt(&opts1)?;
-        let cached_atom_pyclass = opts1.get_item("atom_call")?;
+        let atom_call = match opts1.get_item("atom_call")? {
+            Some(f) if f.is_none() => None,
+            Some(f) if !f.is_callable() => {
+                return Err(CodecError::BadOptions {
+                    txt: "'atom_call' must be callable".to_string(),
+                })
+            }
+            other => other,
+        };
         let s8opt = helpers::get_byte_str_opt(&opts1)?;
 
         let decode_hook = match opts1.get_item("decode_hook")? {
-            Some(h1) => h1.cast_into::<PyDict>()?,
+            Some(h1) if h1.is_none() => PyDict::new(py),
+            Some(h1) => match h1.cast_into::<PyDict>() {
+                Ok(d) => d,
+                Err(_) => {
+                    return Err(CodecError::BadOptions {
+                        txt: "'decode_hook' must be a dict".to_string(),
+                    })
+                }
+            },
             None => PyDict::new(py),
         };
 
@@ -74,7 +95,9 @@ impl<'py> Decoder<'py> {
             atom_representation: aopt,
             bytestring_repr: s8opt,
             decode_hook,
-            cached_atom_pyclass,
+            atom_call,
+            cached_atom_pyclass: None,
+            cached_node_atom_pyclass: None,
             cached_pid_pyclass: None,
             cached_ref_pyclass: None,
             cached_fun_pyclass: None,
@@ -202,9 +225,8 @@ impl<'py> Decoder<'py> {
         usize: std::convert::From<T>,
         T: Readable,
     {
-        let sz = reader.read_with::<T>()?.into();
-        let txt = str::from_utf8(reader.read(sz)?)?;
-        self.create_atom(txt)
+        let txt = read_utf8_text::<T>(reader)?;
+        self.create_atom(&txt)
     }
 
     #[inline]
@@ -213,15 +235,8 @@ impl<'py> Decoder<'py> {
         usize: std::convert::From<T>,
         T: Readable,
     {
-        let sz = reader.read_with::<T>()?.into();
-        let buf = reader.read(sz)?;
-        if buf.is_ascii() {
-            let txt = str::from_utf8(buf)?;
-            self.create_atom(txt)
-        } else {
-            let txt = buf.iter().map(|c| char::from(*c)).collect::<String>();
-            self.create_atom(&txt)
-        }
+        let txt = read_latin1_text::<T>(reader)?;
+        self.create_atom(&txt)
     }
 
     #[inline]
@@ -233,6 +248,9 @@ impl<'py> Decoder<'py> {
             _ => {}
         }
 
+        if let Some(f) = &self.atom_call {
+            return Ok(f.call1((txt,))?);
+        }
         match self.atom_representation {
             AtomRepresentation::Bytes => Ok(PyBytes::new(self.py, txt.as_bytes()).into_any()),
             AtomRepresentation::Str => Ok(txt.into_bound_py_any(self.py)?),
@@ -318,6 +336,11 @@ impl<'py> Decoder<'py> {
         } else {
             // We are looking at an improper list
             let tail_val = self.decode(reader)?;
+            if sz == 0 {
+                // A zero-length list is its tail: <<108,0,0,0,0,97,42>> is 42
+                // (binary_SUITE:robustness), as in the Python codec.
+                return Ok(tail_val);
+            }
             let improper_list_cls = cached_class(
                 self.py,
                 &mut self.cached_improper_list_pyclass,
@@ -360,14 +383,24 @@ impl<'py> Decoder<'py> {
         Ok(PyTuple::new(self.py, result)?.into_any())
     }
 
-    /// Decode the node name of a pid or reference: always as a Python `str`,
-    /// whatever the "atom" option says.
+    /// Decode the node name of a pid or reference: always a `term.atom.Atom`,
+    /// whatever the options and hooks say. Anything but an atom is an error.
     fn decode_node_name(&mut self, reader: &mut Reader) -> CodecResult<Bound<'py, PyAny>> {
-        let save_repr = self.atom_representation;
-        self.atom_representation = AtomRepresentation::Str;
-        let node = self.decode(reader);
-        self.atom_representation = save_repr;
-        node
+        let tag = reader.read_u8()?;
+        let txt = match tag {
+            consts::TAG_ATOM_EXT => read_latin1_text::<u16>(reader)?,
+            consts::TAG_ATOM_UTF8_EXT => read_utf8_text::<u16>(reader)?,
+            consts::TAG_SMALL_ATOM_EXT => read_latin1_text::<u8>(reader)?,
+            consts::TAG_SMALL_ATOM_UTF8_EXT => read_utf8_text::<u8>(reader)?,
+            _ => return Err(CodecError::NodeNotAnAtom { b: tag }),
+        };
+        let atom_cls = cached_class(
+            self.py,
+            &mut self.cached_node_atom_pyclass,
+            "term.atom",
+            "Atom",
+        )?;
+        Ok(atom_cls.call1((txt,))?)
     }
 
     /// Given input _after_ the PID tag byte, parse an external pid
@@ -476,3 +509,28 @@ impl<'py> Decoder<'py> {
     }
 }
 // end impl
+
+/// Read the length (a `T`) and the UTF-8 text of an atom.
+fn read_utf8_text<'a, T>(reader: &mut Reader<'a>) -> CodecResult<Cow<'a, str>>
+where
+    usize: std::convert::From<T>,
+    T: Readable,
+{
+    let sz = reader.read_with::<T>()?.into();
+    Ok(Cow::Borrowed(str::from_utf8(reader.read(sz)?)?))
+}
+
+/// Read the length (a `T`) and the Latin-1 text of an atom.
+fn read_latin1_text<'a, T>(reader: &mut Reader<'a>) -> CodecResult<Cow<'a, str>>
+where
+    usize: std::convert::From<T>,
+    T: Readable,
+{
+    let sz = reader.read_with::<T>()?.into();
+    let buf = reader.read(sz)?;
+    if buf.is_ascii() {
+        Ok(Cow::Borrowed(str::from_utf8(buf)?))
+    } else {
+        Ok(Cow::Owned(buf.iter().map(|c| char::from(*c)).collect()))
+    }
+}

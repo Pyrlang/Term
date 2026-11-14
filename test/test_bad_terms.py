@@ -597,9 +597,6 @@ def _vector_blocks() -> tuple[dict[str, str], dict[tuple[str, str], str]]:
     both[b + "otp_5484.pid_bad_values"] = "TERM-11"
     for n in ("ref_first_word_2p18", "ref_7_words", "pid_creation_4", "ref_creation_4"):
         both["node_container_SUITE.bad_nc." + n] = "TERM-11"
-    # A node that is not an atom (Python: AssertionError; native accepts).
-    both[b + "otp_5484.pid_nil_node"] = "TERM-08"
-    both[b + "otp_5484.new_fun_bad_pid"] = "TERM-08"
     # Python reads past the end: IndexError, UnicodeDecodeError, short reads.
     by[(b + "bad_binary_to_term.atom_utf8_cut_char", "py")] = "TERM-08"
     by[(b + "bad_binary_to_term_2.large_big_huge", "py")] = "TERM-08"

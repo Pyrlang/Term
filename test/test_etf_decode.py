@@ -1,7 +1,11 @@
 """Decoding tests; each runs against the Python and the native codec."""
 
 import sys
+from pathlib import Path
 from types import ModuleType
+from typing import Any
+
+import pytest
 
 from term import py_codec_impl as py_impl
 from term.atom import Atom, StrictAtom
@@ -9,6 +13,9 @@ from term.fun import Fun
 from term.list import ImproperList, list_to_unicode_str
 from term.pid import Pid
 from term.reference import Reference
+
+# The golden fixtures written by OTP (TERM-03).
+FIXTURE_DIR = Path(__file__).parent / "fixtures"
 
 # Sentinel used to verify that post-decoded tails are preserved properly
 EXPECTED_TAIL_BYTES = bytes([1, 2, 3, 4, 5])
@@ -1220,6 +1227,136 @@ def test_decode_hook(codec: ModuleType) -> None:
     )
     assert negative_val == -4747
     _assert_expected_tail(tail)
+
+
+# {a, [b, #{c => "d"}]} as term_to_binary writes it on OTP 29 (TERM-06).
+NESTED = bytes(
+    [131, 104, 2, 119, 1, 97, 108, 0, 0, 0, 2, 119, 1, 98, 116, 0, 0, 0, 1]
+    + [119, 1, 99, 107, 0, 1, 100, 106]
+)
+
+
+def _typed(value: Any) -> Any:
+    """``value`` with the exact type of every part spelled out, so that
+    ``==`` also compares types (``Atom("a") == "a"`` otherwise)."""
+    if isinstance(value, (list, tuple)):
+        return (type(value).__name__, [_typed(v) for v in value])
+    if isinstance(value, dict):
+        return ("dict", [(_typed(k), _typed(v)) for k, v in value.items()])
+    return (type(value).__name__, value)
+
+
+def _hooked(text: str) -> tuple[str, str]:
+    return ("hooked", text)
+
+
+# Options -> the value of NESTED decoded with them: every option and hook
+# reaches the nested terms, not only the outermost one.
+NESTED_CASES: dict[str, tuple[dict[str, Any], Any]] = {
+    "atom_Atom": (
+        {"atom": "Atom"},
+        (Atom("a"), [Atom("b"), {Atom("c"): "d"}]),
+    ),
+    "atom_StrictAtom": (
+        {"atom": "StrictAtom"},
+        (StrictAtom("a"), [StrictAtom("b"), {StrictAtom("c"): "d"}]),
+    ),
+    "atom_str": ({"atom": "str"}, ("a", ["b", {"c": "d"}])),
+    "atom_bytes": ({"atom": "bytes"}, (b"a", [b"b", {b"c": "d"}])),
+    "atom_call": (
+        {"atom_call": _hooked},
+        (_hooked("a"), [_hooked("b"), {_hooked("c"): "d"}]),
+    ),
+    "atom_call_beats_atom": (
+        {"atom": "bytes", "atom_call": _hooked},
+        (_hooked("a"), [_hooked("b"), {_hooked("c"): "d"}]),
+    ),
+    "byte_string_str": (
+        {"byte_string": "str"},
+        (Atom("a"), [Atom("b"), {Atom("c"): "d"}]),
+    ),
+    "byte_string_bytes": (
+        {"byte_string": "bytes"},
+        (Atom("a"), [Atom("b"), {Atom("c"): b"d"}]),
+    ),
+    "byte_string_int_list": (
+        {"byte_string": "int_list"},
+        (Atom("a"), [Atom("b"), {Atom("c"): [100]}]),
+    ),
+    "hook_Atom": (
+        {"decode_hook": {"Atom": lambda a: _hooked(str(a))}},
+        (_hooked("a"), [_hooked("b"), {_hooked("c"): "d"}]),
+    ),
+    "hook_tuple": (
+        {"decode_hook": {"tuple": list}},
+        [Atom("a"), [Atom("b"), {Atom("c"): "d"}]],
+    ),
+    "hook_str_deepest": (
+        {"decode_hook": {"str": str.upper}},
+        (Atom("a"), [Atom("b"), {Atom("c"): "D"}]),
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(NESTED_CASES))
+def test_options_reach_nested_terms(codec: ModuleType, case: str) -> None:
+    options, expected = NESTED_CASES[case]
+    value, tail = codec.binary_to_term(NESTED, options)
+    assert tail == b""
+    assert _typed(value) == _typed(expected)
+    # The same without the 131 byte.
+    value, tail = codec.binary_to_term_2(NESTED[1:], options)
+    assert tail == b""
+    assert _typed(value) == _typed(expected)
+
+
+def test_hook_sees_each_value_once(codec: ModuleType) -> None:
+    """A hook runs once per value, children before their parent; the NIL
+    that ends a list is not a value."""
+    seen: list[str] = []
+
+    def log(value: Any) -> Any:
+        seen.append(type(value).__name__)
+        return value
+
+    hooks = {name: log for name in ("Atom", "list", "dict", "str", "tuple")}
+    codec.binary_to_term(NESTED, {"decode_hook": hooks})
+    assert seen == ["Atom", "Atom", "Atom", "str", "dict", "list", "tuple"]
+
+
+def test_node_names_ignore_options(codec: ModuleType) -> None:
+    """Node names of pids and references are Atom whatever the options; no
+    hook sees them."""
+    pid = (FIXTURE_DIR / "pid_small.etf").read_bytes()
+    ref = (FIXTURE_DIR / "ref_3_words.etf").read_bytes()
+
+    def no_atoms(value: Any) -> Any:
+        raise AssertionError("hook called for %r" % (value,))
+
+    for data in (pid, ref):
+        for options in (
+            {"atom": "bytes"},
+            {"atom": "str", "decode_hook": {"Atom": no_atoms, "str": no_atoms}},
+            {"atom_call": no_atoms},
+        ):
+            value, _tail = codec.binary_to_term(data, options)
+            assert type(value.node_name_) is Atom
+            assert value.node_name_ == "fix@host"
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"atom": "Atoms"},
+        {"byte_string": "list"},
+        {"atom_call": "not callable"},
+        {"decode_hook": [("int", abs)]},
+    ],
+    ids=["atom", "byte_string", "atom_call", "decode_hook"],
+)
+def test_bad_options(codec: ModuleType, options: dict[str, Any]) -> None:
+    with pytest.raises(codec.PyCodecError):
+        codec.binary_to_term(NESTED, options)
 
 
 def test_decode_fun(codec: ModuleType) -> None:

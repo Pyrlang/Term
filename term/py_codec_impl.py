@@ -26,7 +26,7 @@ from term.atom import Atom, StrictAtom
 from term.basetypes import Term
 from term.bitstring import BitString
 from term.fun import Fun
-from term.list import NIL, ImproperList
+from term.list import ImproperList
 from term.pid import Pid
 from term.reference import Reference
 
@@ -123,66 +123,38 @@ def binary_to_term(data: bytes, options: OptionsType = None) -> tuple[Term, byte
     else:
         decode_data = data[1:]
 
-    decode_hook = options.get("decode_hook", {})
-    val, rem = binary_to_term_2(decode_data, options)
-    type_name_ref = type(val).__name__
-    if type_name_ref in decode_hook:
-        return decode_hook.get(type_name_ref)(val), rem
-    else:
-        return val, rem
+    return binary_to_term_2(decode_data, options)
 
 
-def _bytes_to_atom(
-    name: bytes, encoding: str, create_atom_fn: Callable[[bytes, str], Any]
-) -> Optional[Union[Atom, bool]]:
-    """Recognize familiar atom values."""
-    if name == b"true":
-        return True
-    elif name == b"false":
-        return False
-    elif name == b"undefined":
-        return None
-    else:
-        return create_atom_fn(name, encoding)
-
-
-def _get_create_atom_fn(
-    opt: str, create_fn: Optional[Callable[[str], Any]]
-) -> Callable[[bytes, str], Any]:
-    def _create_atom_bytes(name: bytes, _encoding: str) -> bytes:
-        return name
-
-    def _create_atom_str(name: bytes, encoding: str) -> str:
-        return name.decode(encoding)
-
-    def _create_atom_atom(name: bytes, encoding: str) -> Atom:
-        return Atom(name.decode(encoding))
-
-    def _create_atom_strict_atom(name: bytes, encoding: str) -> Atom:
-        return StrictAtom(name.decode(encoding))
-
-    if create_fn is not None:
-        custom_fn = create_fn
-
-        def _create_atom_custom(name: bytes, encoding: str) -> object:
-            return custom_fn(name.decode(encoding))
-
-        return _create_atom_custom
-    if opt == "Atom":
-        return _create_atom_atom
-    elif opt == "StrictAtom":
-        return _create_atom_strict_atom
-    elif opt == "str":
-        return _create_atom_str
-    elif opt == "bytes":
-        return _create_atom_bytes
-
-    raise PyCodecError(
-        "Option 'atom' is '%s'; expected 'str', 'bytes', " "'Atom', StrictAtom"
+def _atom_text(name: bytes, tag: int) -> str:
+    """The text of an atom: tags 100 and 115 carry Latin-1, 118 and 119 UTF-8."""
+    return name.decode(
+        "latin-1" if tag in (TAG_ATOM_EXT, TAG_SMALL_ATOM_EXT) else "utf8"
     )
 
 
-def _get_create_str_fn(opt: str) -> Callable[[bytes], Union[str, bytes, list[int]]]:
+def _get_create_atom_fn(
+    opt: object, create_fn: Optional[Callable[[str], Any]]
+) -> Callable[[str], Any]:
+    """The function that turns atom text into the value the options ask for."""
+    if create_fn is not None:
+        return create_fn
+    if opt == "Atom":
+        return Atom
+    elif opt == "StrictAtom":
+        return StrictAtom
+    elif opt == "str":
+        return str
+    elif opt == "bytes":
+        # The UTF-8 text, whichever tag carried the atom (as the native codec).
+        return lambda text: text.encode("utf8")
+
+    raise PyCodecError(
+        "Option 'atom' is %r; expected 'str', 'bytes', 'Atom', 'StrictAtom'" % (opt,)
+    )
+
+
+def _get_create_str_fn(opt: object) -> Callable[[bytes], Union[str, bytes, list[int]]]:
     """A tool function to create either a str or bytes from a 8-bit string."""
 
     def _create_int_list(name: bytes) -> list[int]:
@@ -201,7 +173,70 @@ def _get_create_str_fn(opt: str) -> Callable[[bytes], Union[str, bytes, list[int
     elif opt == "int_list":
         return _create_int_list
 
-    raise PyCodecError("Option 'byte_string' is '%s'; expected 'str', 'bytes'")
+    raise PyCodecError(
+        "Option 'byte_string' is %r; expected 'str', 'bytes', 'int_list'" % (opt,)
+    )
+
+
+# The decoding options, resolved once per call and shared by every nested
+# term, so that options and hooks apply at every depth (as in the native codec).
+class _Decoder:
+    def __init__(self, options: OptionsType) -> None:
+        if options is None:
+            options = {}
+        atom_call = options.get("atom_call")
+        if atom_call is not None and not callable(atom_call):
+            raise PyCodecError("Option 'atom_call' must be callable")
+        self.create_atom_: Callable[[str], Any] = _get_create_atom_fn(
+            options.get("atom", "Atom"), atom_call
+        )
+        self.create_str_ = _get_create_str_fn(options.get("byte_string", "str"))
+        hooks = options.get("decode_hook")
+        if hooks is not None and not isinstance(hooks, dict):
+            raise PyCodecError("Option 'decode_hook' must be a dict")
+        # Hook functions are user code taking and returning any value.
+        self.decode_hook_: dict[str, Callable[[Any], Any]] = hooks or {}
+
+    def atom(self, name: bytes, tag: int) -> Any:
+        """An atom as the options ask; true, false, undefined become Python
+        True, False, None whatever the options say."""
+        if name == b"true":
+            return True
+        elif name == b"false":
+            return False
+        elif name == b"undefined":
+            return None
+        return self.create_atom_(_atom_text(name, tag))
+
+    def decode(self, data: bytes) -> tuple[Any, bytes]:
+        """Decode one term and pass it through the decode hook of its type."""
+        value, tail = _decode_term(self, data)
+        if self.decode_hook_:
+            hook = self.decode_hook_.get(type(value).__name__)
+            if hook is not None:
+                value = hook(value)
+        return value, tail
+
+
+def _decode_node(data: bytes) -> tuple[Atom, bytes]:
+    """The node name of a pid, port or reference: always an ``Atom``,
+    whatever the options and hooks say."""
+    tag = data[0]
+    if tag in (TAG_ATOM_EXT, TAG_ATOM_UTF8_EXT):
+        if len(data) < 3:
+            incomplete_data("decoding length for a node name")
+        start = 3
+        end = start + util.u16(data, 1)
+    elif tag in (TAG_SMALL_ATOM_EXT, TAG_SMALL_ATOM_UTF8_EXT):
+        if len(data) < 2:
+            incomplete_data("decoding length for a node name")
+        start = 2
+        end = start + data[1]
+    else:
+        raise PyCodecError("Node name must be an atom, found tag %d" % tag)
+    if end > len(data):
+        incomplete_data("decoding text for a node name")
+    return Atom(_atom_text(data[start:end], tag)), data[end:]
 
 
 def binary_to_term_2(data: bytes, options: OptionsType = None) -> tuple[Term, bytes]:
@@ -224,9 +259,14 @@ def binary_to_term_2(data: bytes, options: OptionsType = None) -> tuple[Term, by
             * "atom": "str" | "bytes" | "Atom" | "StrictAtom"; default "Atom".
               Returns atoms as strings, as bytes or as atom.Atom class objects
             * "atom_call": callable object that will get str as input the
-              returned value will be used as atom representation
+              returned value will be used as atom representation; takes
+              precedence over "atom"
             * "byte_string": "str" | "bytes" | "int_list" (default "str").
               Returns 8-bit strings as Python str or bytes or int list.
+            * "decode_hook": dict of type name -> callable, called for every
+              decoded value (nested ones too) whose type has that name.
+              Options and hooks apply at every nesting level; node names of
+              pids and references are always ``Atom``.
     :param data: Bytes containing encoded term without 131 header
     :rtype: Tuple[Value, Tail: bytes]
     :return: The function consumes as much data as
@@ -234,15 +274,12 @@ def binary_to_term_2(data: bytes, options: OptionsType = None) -> tuple[Term, by
         another term if there was any.
     :raises PyCodecError(str): on various errors
     """
-    if options is None:
-        options = {}
+    return _Decoder(options).decode(data)
 
-    atom_call_opt = options.get("atom_call")
-    create_atom_fn = _get_create_atom_fn(
-        options.get("atom", "Atom"), atom_call_opt if callable(atom_call_opt) else None
-    )
-    create_str_fn = _get_create_str_fn(options.get("byte_string", "str"))
 
+def _decode_term(dec: _Decoder, data: bytes) -> tuple[Any, bytes]:
+    """Decode one term with the options in ``dec``; nested terms go through
+    ``dec.decode``."""
     tag = data[0]
 
     if tag in [TAG_ATOM_EXT, TAG_ATOM_UTF8_EXT]:
@@ -255,8 +292,7 @@ def binary_to_term_2(data: bytes, options: OptionsType = None) -> tuple[Term, by
             return incomplete_data("decoding text for an atom")
 
         name = data[3:len_expected]
-        enc = "latin-1" if tag == TAG_ATOM_EXT else "utf8"
-        return _bytes_to_atom(name, enc, create_atom_fn), data[len_expected:]
+        return dec.atom(name, tag), data[len_expected:]
 
     if tag in [TAG_SMALL_ATOM_EXT, TAG_SMALL_ATOM_UTF8_EXT]:
         len_data = len(data)
@@ -265,9 +301,7 @@ def binary_to_term_2(data: bytes, options: OptionsType = None) -> tuple[Term, by
 
         len_expected = data[1] + 2
         name = data[2:len_expected]
-
-        enc = "latin-1" if tag == TAG_SMALL_ATOM_EXT else "utf8"
-        return _bytes_to_atom(name, enc, create_atom_fn), data[len_expected:]
+        return dec.atom(name, tag), data[len_expected:]
 
     if tag == TAG_NIL_EXT:
         return [], data[1:]
@@ -282,7 +316,7 @@ def binary_to_term_2(data: bytes, options: OptionsType = None) -> tuple[Term, by
         if len_expected > len_data:
             return incomplete_data()
 
-        return create_str_fn(data[3:len_expected]), data[len_expected:]
+        return dec.create_str_(data[3:len_expected]), data[len_expected:]
 
     if tag == TAG_LIST_EXT:
         if len(data) < 5:
@@ -291,14 +325,15 @@ def binary_to_term_2(data: bytes, options: OptionsType = None) -> tuple[Term, by
         result_l = []
         tail = data[5:]
         while len_expected > 0:
-            term1, tail = binary_to_term_2(tail)
+            term1, tail = dec.decode(tail)
             result_l.append(term1)
             len_expected -= 1
 
-        # Read list tail and set it
-        list_tail, tail = binary_to_term_2(tail)
-        if list_tail == NIL:
-            return result_l, tail
+        # A NIL tail makes a proper list; it is not a value of its own, so
+        # no decode hook sees it.
+        if tail[:1] == bytes([TAG_NIL_EXT]):
+            return result_l, tail[1:]
+        list_tail, tail = dec.decode(tail)
         if not result_l:
             # A zero-length list is its tail: <<108,0,0,0,0,97,42>> is 42
             # (binary_SUITE:robustness); the native codec agrees.
@@ -312,7 +347,7 @@ def binary_to_term_2(data: bytes, options: OptionsType = None) -> tuple[Term, by
         result_t = []
         tail = data[2:]
         while len_expected > 0:
-            term1, tail = binary_to_term_2(tail)
+            term1, tail = dec.decode(tail)
             result_t.append(term1)
             len_expected -= 1
 
@@ -325,7 +360,7 @@ def binary_to_term_2(data: bytes, options: OptionsType = None) -> tuple[Term, by
         result_lt = []
         tail = data[5:]
         while len_expected > 0:
-            term1, tail = binary_to_term_2(tail)
+            term1, tail = dec.decode(tail)
             result_lt.append(term1)
             len_expected -= 1
 
@@ -342,7 +377,7 @@ def binary_to_term_2(data: bytes, options: OptionsType = None) -> tuple[Term, by
         return util.i32(data, 1), data[5:]
 
     if tag == TAG_PID_EXT:
-        node, tail = binary_to_term_2(data[1:])
+        node, tail = _decode_node(data[1:])
         id1 = util.u32(tail, 0)
         serial = util.u32(tail, 4)
         creation = tail[8]
@@ -352,7 +387,7 @@ def binary_to_term_2(data: bytes, options: OptionsType = None) -> tuple[Term, by
         return pid1, tail[9:]
 
     if tag == TAG_NEW_PID_EXT:
-        node, tail = binary_to_term_2(data[1:])
+        node, tail = _decode_node(data[1:])
         id1 = util.u32(tail, 0)
         serial = util.u32(tail, 4)
         creation = util.u32(tail, 8)
@@ -365,7 +400,7 @@ def binary_to_term_2(data: bytes, options: OptionsType = None) -> tuple[Term, by
         if len(data) < 2:
             return incomplete_data("decoding length for a new-ref")
         term_len = util.u16(data, 1)
-        node, tail = binary_to_term_2(data[3:])
+        node, tail = _decode_node(data[3:])
         creation = tail[0]
         id_len = 4 * term_len
         ref_id = tail[1 : id_len + 1]
@@ -377,7 +412,7 @@ def binary_to_term_2(data: bytes, options: OptionsType = None) -> tuple[Term, by
         if len(data) < 2:
             return incomplete_data("decoding length for a newer-ref")
         term_len = util.u16(data, 1)
-        node, tail = binary_to_term_2(data[3:])
+        node, tail = _decode_node(data[3:])
         creation = util.u32(tail, 0)
         id_len = 4 * term_len
         ref_id = tail[4 : id_len + 4]
@@ -392,8 +427,8 @@ def binary_to_term_2(data: bytes, options: OptionsType = None) -> tuple[Term, by
         result_m = {}
         tail = data[5:]
         while len_expected > 0:
-            term1, tail = binary_to_term_2(tail)
-            term2, tail = binary_to_term_2(tail)
+            term1, tail = dec.decode(tail)
+            term2, tail = dec.decode(tail)
             result_m[term1] = term2
             len_expected -= 1
 
@@ -452,14 +487,14 @@ def binary_to_term_2(data: bytes, options: OptionsType = None) -> tuple[Term, by
         uniq = data[6:22]
         index = util.u32(data, 22)
         num_free = util.u32(data, 26)
-        mod, tail = binary_to_term_2(data[30:])
-        old_index, tail = binary_to_term_2(tail)
-        old_uniq, tail = binary_to_term_2(tail)
-        pid3, tail = binary_to_term_2(tail)
+        mod, tail = dec.decode(data[30:])
+        old_index, tail = dec.decode(tail)
+        old_uniq, tail = dec.decode(tail)
+        pid3, tail = dec.decode(tail)
 
         free_vars = []
         while num_free > 0:
-            v, tail = binary_to_term_2(tail)
+            v, tail = dec.decode(tail)
             free_vars.append(v)
             num_free -= 1
 

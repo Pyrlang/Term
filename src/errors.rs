@@ -34,6 +34,9 @@ pub enum CodecError {
     PythonError { txt: String, error: PyErr },
     #[error("Unrecognized term tag byte: {}", b)]
     UnknownTermTagByte { b: u8 },
+    // A pid, port or reference whose node is not an atom (OTP rejects it).
+    #[error("Node name must be an atom, found tag {}", b)]
+    NodeNotAnAtom { b: u8 },
     #[error("Bad options passed: {}", txt)]
     BadOptions { txt: String },
     #[error("Integer {} is too large (> 32bit): big integers not impl", i)]
