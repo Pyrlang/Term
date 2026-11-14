@@ -22,6 +22,12 @@ clearterminal:
 test: clearterminal
 	$(PY) -m pytest test
 
+# Regenerate the golden ETF fixtures with the Erlang/OTP on PATH (use OTP 29).
+.PHONY: fixtures
+fixtures:
+	erlc -o test/erl test/erl/gen_fixtures.erl
+	erl -noshell -pa test/erl -run gen_fixtures main test/fixtures -s init stop
+
 .PHONY: clearterminal dtest
 dtest: compile
 	PYTHONPATH=$(ROOT):$(ROOT)/target/debug gdb --args python3 test/etf_decode_test.py

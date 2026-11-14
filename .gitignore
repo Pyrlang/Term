@@ -9,6 +9,7 @@
 *.o
 *.a
 *.so
+*.beam
 
 /.idea
 *.iml

@@ -1,0 +1,3 @@
+# Golden ETF bytes written by OTP: never convert line endings or diff as text.
+*.etf binary
+MANIFEST.tsv text eol=lf
