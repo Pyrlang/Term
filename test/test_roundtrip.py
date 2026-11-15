@@ -8,11 +8,12 @@ term it decodes its own bytes to. Our bytes may differ from OTP's (the golden
 byte comparison is ``test_fixtures.py:test_encode_fixture``); the term must
 not.
 
-Needs ``erl`` on ``PATH``; skipped otherwise.
+Needs ``erl`` (see ``otp.py``); skipped otherwise. A vector that this
+release of OTP cannot decode itself (a native record before OTP 29) is
+skipped: there is nothing to compare with.
 """
 
 import importlib
-import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -28,15 +29,15 @@ from fixture_manifest import (
     load_vectors,
     roundtrip_blocker,
 )
+from otp import ERL, otp_release
 
 from term import py_codec_impl
 
-# The Erlang runtime used as the judge; None skips this module.
-ERL = shutil.which("erl")
-
 pytestmark = [
     pytest.mark.erlang,
-    pytest.mark.skipif(ERL is None, reason="erl (Erlang/OTP) is not on PATH"),
+    pytest.mark.skipif(
+        ERL is None, reason="no erl: set PYRLANG_ERL or put erl on PATH"
+    ),
 ]
 
 CHECKER_SRC = Path(__file__).parent / "erl" / "check_roundtrip.erl"
@@ -61,6 +62,8 @@ class _Report:
     errors: dict[tuple[str, str, str], str] = field(default_factory=dict)
     # OTP decoded our bytes to another term, or could not decode them.
     mismatches: dict[tuple[str, str, str], str] = field(default_factory=dict)
+    # OTP could not decode the fixture itself (an older release).
+    undecodable: set[tuple[str, str, str]] = field(default_factory=set)
     # Files written and files OTP reported as checked, per (set, codec).
     written: dict[tuple[str, str], int] = field(default_factory=dict)
     checked: dict[tuple[str, str], int] = field(default_factory=dict)
@@ -127,6 +130,9 @@ def roundtrip_report(tmp_path_factory: pytest.TempPathFactory) -> _Report:
         parts = line.split("\t")
         if parts[0] == "checked" and len(parts) == 3:
             report.checked[dir_keys[parts[1]]] = int(parts[2])
+        elif parts[0] == "undecodable" and len(parts) == 3:
+            set_name, cid = dir_keys[parts[1]]
+            report.undecodable.add((set_name, cid, parts[2]))
         elif parts[0] == "mismatch" and len(parts) == 4:
             set_name, cid = dir_keys[parts[1]]
             report.mismatches[(set_name, cid, parts[2])] = parts[3]
@@ -158,6 +164,8 @@ def test_roundtrip(
     request: pytest.FixtureRequest,
 ) -> None:
     cid = codec_id(codec)
+    if (set_name, cid, vector.name) in roundtrip_report.undecodable:
+        pytest.skip("OTP %d cannot decode this OTP 29 vector" % otp_release())
     step = roundtrip_blocker(vector, cid)
     if step is not None:
         request.applymarker(pytest.mark.xfail(strict=True, reason=step))

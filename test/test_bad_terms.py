@@ -41,7 +41,6 @@ that step is done, delete its lines from the tables below.
 
 import json
 import queue
-import shutil
 import struct
 import subprocess
 import sys
@@ -63,6 +62,7 @@ from fixture_manifest import (
     codec_id,
     load_vectors,
 )
+from otp import ERL, otp_release
 
 # OTP's data files for more_bad_terms and otp_8180, as raw bytes.
 BAD_DIR = FIXTURE_DIR / "bad"
@@ -70,8 +70,6 @@ BAD_DIR = FIXTURE_DIR / "bad"
 WORKER = Path(__file__).parent / "decode_worker.py"
 CHECKER_SRC = Path(__file__).parent / "erl" / "check_rejected.erl"
 
-# The Erlang runtime that judges which inputs are bad; None skips those tests.
-ERL = shutil.which("erl")
 
 # Longest time one worker request (all mutations of one fixture) may take.
 REQUEST_TIMEOUT = 300.0
@@ -610,9 +608,25 @@ def test_broken_fixtures(
 _OTP_TRUNCATE_BUDGET = 16
 
 
-def _must_reject_inputs() -> list[tuple[str, bytes]]:
+# Must-reject vectors on which some OTP releases disagree: vector name ->
+# the releases whose verdict is not asked, and why. Our codecs follow
+# OTP 29 and reject them all the same (test_bad_vector).
+OTP_DISAGREES: dict[str, tuple[frozenset[int], str]] = {
+    "binary_SUITE.bad_binary_to_term.bits_0_of_0_bytes": (
+        frozenset({25, 26, 28}),
+        "OTP 25 and 26 decode it as <<>>; OTP 28.4.1 aborts the VM"
+        " allocating 2^61 bytes",
+    ),
+}
+
+
+def _must_reject_inputs(release: int = 29) -> list[tuple[str, bytes]]:
     """Every input that the tests above require to be rejected."""
-    inputs = [(v.name, v.data) for v in BAD_VECTORS]
+    inputs = [
+        (v.name, v.data)
+        for v in BAD_VECTORS
+        if release not in OTP_DISAGREES.get(v.name, (frozenset(), ""))[0]
+    ]
     for set_name, v in FIXTURES:
         data = v.path.read_bytes()
         where = "%s/%s" % (set_name, v.name)
@@ -624,11 +638,11 @@ def _must_reject_inputs() -> list[tuple[str, bytes]]:
 
 
 @pytest.mark.erlang
-@pytest.mark.skipif(ERL is None, reason="erl (Erlang/OTP) is not on PATH")
+@pytest.mark.skipif(ERL is None, reason="no erl: set PYRLANG_ERL or put erl on PATH")
 def test_otp_rejects_them_too(tmp_path: Path) -> None:
     """OTP's binary_to_term/1 rejects every input we must reject."""
     assert ERL is not None
-    inputs = _must_reject_inputs()
+    inputs = _must_reject_inputs(otp_release())
     blob = tmp_path / "inputs.bin"
     blob.write_bytes(b"".join(_u32(len(d)) + d for _, d in inputs))
     beam_dir = tmp_path / "beam"

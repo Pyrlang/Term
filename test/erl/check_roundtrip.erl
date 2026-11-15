@@ -21,8 +21,11 @@
 %%
 %% Several (fixture dir, ours dir) pairs are checked by one VM start. Output,
 %% one line each, tab-separated:
-%%   mismatch  <OursDir>  <name>  <reason>
-%%   checked   <OursDir>  <count>
+%%   mismatch     <OursDir>  <name>  <reason>
+%%   undecodable  <OursDir>  <name>   (this release cannot decode the fixture
+%%                                     itself, e.g. a native record before
+%%                                     OTP 29: nothing to compare with)
+%%   checked      <OursDir>  <count>
 %% The VM exits with status 0 when every file matched, 1 otherwise.
 
 -module(check_roundtrip).
@@ -57,13 +60,22 @@ check_file(FixDir, OursDir, File) ->
     case Result of
         ok ->
             ok;
+        fixture_undecodable ->
+            io:format("undecodable\t~ts\t~ts~n", [OursDir, Name]),
+            ok;
         _ ->
             io:format("mismatch\t~ts\t~ts\t~0P~n", [OursDir, Name, Result, 12]),
             Result
     end.
 
 compare(Theirs, Ours) ->
-    Expected = binary_to_term(Theirs),
+    try binary_to_term(Theirs) of
+        Expected -> compare_ours(Expected, Ours)
+    catch
+        error:badarg -> fixture_undecodable
+    end.
+
+compare_ours(Expected, Ours) ->
     try binary_to_term(Ours) of
         Decoded when Decoded =:= Expected -> ok;
         Other -> {different, Other}

@@ -1,7 +1,8 @@
 [build-system]
 # setuptools-rust 1.12+ configures PyO3 0.30 for an extension module (the
 # `extension-module` cargo feature is deprecated).
-requires = ["setuptools", "wheel", "setuptools-rust>=1.12"]
+requires = ["setuptools>=77", "setuptools-rust>=1.12"]
+build-backend = "setuptools.build_meta"
 
 [tool.bumpver]
 current_version = "2023.1001-alpha"
@@ -20,11 +21,16 @@ authors = [
     { name = "Dmytro Lytovchenko", email = "dmytro.lytovchenko@gmail.com" },
     { name = "Johan Sommerfeld", email = "pyrlang@s2hc.com" }
 ]
-license = { file = "LICENSE" }
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 classifiers = [
-    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Rust",
 ]
 keywords = ["erlang", "protocol", "encode", "decode", "etf", "term", "binary"]
 dependencies = [
@@ -33,12 +39,29 @@ requires-python = ">=3.11"
 
 [project.optional-dependencies]
 dev = [
-    "black", "bumpver", "isort", "pip-tools", "pytest",
+    "black", "bumpver", "isort", "mypy", "pip-tools", "pytest", "setuptools-rust>=1.12",
     "Jinja2>=2.10.1", "MarkupSafe>=1.0", "Pillow>=4.0.0", "Pygments>=2.2.0", "Sphinx>=1.6.2"
 ]
 
 [project.urls]
 Homepage = "https://github.com/Pyrlang/Term/"
+
+[tool.setuptools]
+packages = ["term"]
+# The native extension cannot be imported from a zip file.
+zip-safe = false
+
+[[tool.setuptools-rust.ext-modules]]
+# The native codec (src/). Optional: without a Rust toolchain the package
+# installs with the Python codec only, which term/codec.py falls back to.
+target = "term.native_codec_impl"
+binding = "PyO3"
+optional = true
+
+[tool.distutils.bdist_wheel]
+# One abi3 wheel per platform serves every CPython >= 3.11 (PyO3 feature
+# abi3-py311 in Cargo.toml).
+py-limited-api = "cp311"
 
 [tool.setuptools.package-data]
 # PEP 561: ship the type marker and the stub for the native module.
@@ -69,16 +92,14 @@ disallow_incomplete_defs = true
 check_untyped_defs = true
 no_implicit_optional = true
 
+# The version lives in pyproject.toml; Cargo.toml carries the same version in
+# semver form (test/test_packaging.py checks that they agree).
 [tool.bumpver.file_patterns]
 "pyproject.toml" = [
     'current_version = "{version}"',
+    '^version = "{version}"',
 ]
-"setup.py" = [
-    "{version}",
-    "{pep440_version}",
-]
-"README.md" = [
-    "{version}",
-    "{pep440_version}",
+"Cargo.toml" = [
+    '^version = "YYYY.BUILD.0[-TAG]"',
 ]
 

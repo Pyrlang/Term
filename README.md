@@ -18,39 +18,32 @@ will be used.
 
 ### From PyPI
 
-If you just run 
 ```
 pip install pyrlang-term
 ```
-the pure python version will be installed unless there exists a pre built binary.
 
-If you want to build the native one, you'll need rust and a few more packages.
-
-To install rust (from https://www.rust-lang.org/tools/install):
-
-```
-curl https://sh.rustup.rs -sSf | sh
-```
-
-Then install the build requirements before installing pyrlang-term:
-
-```
-pip install setuptools-rust semantic_version
-pip install pyrlang-term
-```
+Wheels are published for Linux, Windows and macOS; each works on every
+CPython from 3.11 on (abi3) and contains the native codec. Where no wheel
+fits, pip builds from source: with a Rust toolchain
+(https://www.rust-lang.org/tools/install) you get the native codec,
+without one the Python codec only.
 
 ### From Source
 
 1. Clone [Term](https://github.com/Pyrlang/Term) repository
-2. Install Term from source: Go to Term directory and `pip install -e .`
+2. In the Term directory: `pip install -e . --config-settings editable_mode=compat`
+   (builds the native codec in place when Rust is available)
 
 ## Testing
 
-To run the tests:
+```
+pip install pytest
+python -m pytest test
+```
 
-```
-python -m unittest discover test
-```
+Tests marked `erlang` let a real Erlang/OTP judge the codecs; they use `erl`
+from `PATH`, or the one named by `$PYRLANG_ERL`, and skip when there is none.
+`make check` runs every check required before a commit.
 
 
 ## Atoms

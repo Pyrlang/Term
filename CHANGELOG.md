@@ -103,3 +103,13 @@
   decode and encode it as OTP does: fields in definition order, flags 0 or 1
   (other bits reserved), no field named twice. Module, name and field names
   are always `Atom`; field values follow the decode options and hooks.
+- Packaging: `pyproject.toml` is the only build configuration (`setup.py`,
+  `build-wheels.sh` and the stale `requirements*.txt` are gone) and holds the
+  one version; `Cargo.toml` carries it in semver form. Wheels are `abi3`:
+  one per platform for every CPython >= 3.11. Without a Rust toolchain a
+  source install now really falls back to the Python codec (the old fallback
+  in `setup.py` never ran). License metadata is the SPDX `Apache-2.0`.
+- CI: lint, type check and tests on Python 3.11-3.14 on Linux, Windows and
+  macOS; OTP 25-29 judge the encoders; abi3 wheels for Linux (x86_64,
+  aarch64), Windows and macOS (x86_64, arm64), each tested in a clean
+  interpreter.

@@ -1,11 +1,11 @@
+# Upload the wheels and sdist of the latest Build run (build.yml) to
+# TestPyPI or PyPI; run by hand.
+
 name: Upload to Pypi
 
 on:
   workflow_dispatch:
     inputs:
-      # version:
-        # description: 'Version upload to pypi'
-        # required: true
       pypi_repo:
         description: 'Repo to upload to (testpypi or pypi)'
         default: 'testpypi'
@@ -13,29 +13,30 @@ on:
 
 jobs:
   upload:
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions/setup-python@v2
-        with:
-          python-version: '3.8'
-      - uses: dawidd6/action-download-artifact@v2
+      - uses: dawidd6/action-download-artifact@v6
         with:
           workflow: build.yml
-      - name: show all data we've got to work with
-        run: ls -R
+          path: artifacts
+      # build.yml uploads one artifact per platform plus the sdist.
+      - name: Collect the distributions
+        run: |
+          mkdir dist
+          find artifacts \( -name '*.whl' -o -name '*.tar.gz' \) -exec cp {} dist/ \;
+          ls -l dist
       - name: Publish package to Test Pypi
         if: ${{ github.event.inputs.pypi_repo == 'testpypi' }}
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           user: __token__
           password: ${{ secrets.PYPI_TEST_TOKEN }}
-          packages_dir: artifact/
-          repository_url: https://test.pypi.org/legacy/
+          packages-dir: dist/
+          repository-url: https://test.pypi.org/legacy/
       - name: Publish package to Pypi
         if: ${{ github.event.inputs.pypi_repo == 'pypi' }}
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           user: __token__
           password: ${{ secrets.PYPI_TEST_TOKEN }}
-          packages_dir: artifact/
+          packages-dir: dist/

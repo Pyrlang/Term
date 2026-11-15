@@ -9,7 +9,6 @@ counts and compressed terms that OTP rejects too are in ``test_bad_terms.py``
 values that contain themselves.
 """
 
-import shutil
 import struct
 import subprocess
 import time
@@ -20,12 +19,11 @@ from typing import Any
 
 import pytest
 from fixture_manifest import codec_id
+from otp import ERL
 
 from term.list import ImproperList
 from term.py_codec_impl import DEFAULT_MAX_DEPTH, DEFAULT_MAX_SIZE
 
-# The Erlang runtime that judges the deep encoding; None skips that test.
-ERL = shutil.which("erl")
 CHECKER_SRC = Path(__file__).parent / "erl" / "check_roundtrip.erl"
 
 # Longest a rejected bomb may take to fail.
@@ -184,7 +182,7 @@ def test_encode_endless_substitution(codec: ModuleType) -> None:
 
 
 @pytest.mark.erlang
-@pytest.mark.skipif(ERL is None, reason="erl (Erlang/OTP) is not on PATH")
+@pytest.mark.skipif(ERL is None, reason="no erl: set PYRLANG_ERL or put erl on PATH")
 def test_otp_decodes_deep_encoding(codec: ModuleType, tmp_path: Path) -> None:
     """OTP writes its own 4096-deep list, and check_roundtrip.erl confirms
     that ours decodes to the same term."""

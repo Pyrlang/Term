@@ -1,45 +1,88 @@
-# This workflow will install Python dependencies, run tests and lint with a variety of Python versions
-# For more information see: https://help.github.com/actions/language-and-framework-guides/using-python-with-github-actions
+# Format, lint, type check and test both codecs (plan step TERM-19): the
+# checks AGENTS.md requires before every commit, on every supported Python
+# and OS, and real OTP releases judging what the codecs encode.
 
 name: Testing
 
 on:
-  #push:
-    #branches: [ master ]
+  push:
+    branches: [master]
   pull_request:
-    branches: [ master ]
+    branches: [master]
   workflow_dispatch:
 
 jobs:
-  build:
-
+  lint:
+    name: Format, lint, type check
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: [3.7, 3.8, 3.9]
-
     steps:
-    - uses: actions/checkout@v2
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v2
-      with:
-        python-version: ${{ matrix.python-version }}
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        python -m pip install flake8 pytest setuptools_rust
-    - name: Lint with flake8
-      run: |
-        # stop the build if there are Python syntax errors or undefined names
-        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-        # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
-        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
-    - name: Build rust native module
-      run: |
-        python setup.py build
-    - name: Install dev link for package
-      run: |
-        pip install -e .
-    - name: Test with pytest
-      run: |
-        pytest
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      # rustup reads the channel and components from rust-toolchain.toml.
+      - name: Rust toolchain
+        run: rustup toolchain install
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install black isort mypy pytest
+          python -m pip install -e . --config-settings editable_mode=compat
+      - run: black --check .
+      - run: isort --check .
+      - run: mypy term
+      - run: mypy --strict --follow-imports=silent test
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+
+  test:
+    name: Python ${{ matrix.python }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Rust toolchain
+        run: rustup toolchain install
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip pytest
+          python -m pip install -e . --config-settings editable_mode=compat
+      # The extension is optional at install time; here it must be built, or
+      # the native half of every test would be skipped.
+      - name: The native codec is built
+        run: python -c "import term.native_codec_impl"
+      - run: cargo test
+      - run: python -m pytest test -m "not erlang" -rs
+
+  erlang:
+    name: OTP ${{ matrix.otp }} judges the codecs
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # The supported peers (decision 1 in the upgrade plan).
+        otp: ["25", "26", "27", "28", "29"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ matrix.otp }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Rust toolchain
+        run: rustup toolchain install
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip pytest
+          python -m pip install -e . --config-settings editable_mode=compat
+          python -c "import term.native_codec_impl"
+      # erl from setup-beam is on PATH (test/otp.py).
+      - run: python -m pytest test -m erlang -rs
