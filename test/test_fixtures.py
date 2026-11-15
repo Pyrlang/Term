@@ -22,6 +22,7 @@ from term.atom import Atom
 from term.bitstring import BitString
 from term.list import ImproperList
 from term.pid import Pid
+from term.port import Port
 from term.reference import Reference
 
 # Where gen_fixtures.erl writes its output.
@@ -59,9 +60,6 @@ FIXTURES = _load_manifest()
 # Fixtures that neither codec decodes yet, and the plan step that fixes them.
 NOT_DECODED: dict[str, str] = {
     "float_1_5_minor_0": "TERM-14",
-    "port_2p28_minus_1": "TERM-10",
-    "port_2p28": "TERM-10",
-    "port_2p64_minus_1": "TERM-10",
     "fun_export": "TERM-12",
     "record_exported": "TERM-17",
     "record_local": "TERM-17",
@@ -144,6 +142,10 @@ EXPECTED: dict[str, Any] = {
     "compressed_list": [(Atom("hello"), b"world")] * 200,
     "pid_small": Pid(_FIX_NODE, 1, 2, 3),
     "pid_max": Pid(_FIX_NODE, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF),
+    # Fed in as NEW_PORT_EXT, V4_PORT_EXT; OTP 29 writes all as V4_PORT_EXT.
+    "port_2p28_minus_1": Port(_FIX_NODE, 2**28 - 1, 1),
+    "port_2p28": Port(_FIX_NODE, 2**28, 1),
+    "port_2p64_minus_1": Port(_FIX_NODE, 2**64 - 1, 0xFFFFFFFF),
     "ref_1_word": Reference(_FIX_NODE, 1, struct.pack(">I", 1)),
     "ref_3_words": Reference(_FIX_NODE, 1, struct.pack(">3I", 1, 2, 3)),
     "ref_5_words": Reference(_FIX_NODE, 1, struct.pack(">5I", 1, 2, 3, 4, 5)),

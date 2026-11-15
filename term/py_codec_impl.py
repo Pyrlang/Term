@@ -31,6 +31,7 @@ from term.bitstring import BitString
 from term.fun import Fun
 from term.list import ImproperList
 from term.pid import Pid
+from term.port import Port
 from term.reference import Reference
 
 ETF_VERSION_TAG = 131
@@ -59,6 +60,7 @@ TAG_NEW_REF_EXT = 114
 TAG_NIL_EXT = 106
 
 TAG_PID_EXT = 103
+TAG_PORT_EXT = 102
 
 TAG_SMALL_ATOM_EXT = 115
 TAG_SMALL_ATOM_UTF8_EXT = 119
@@ -68,7 +70,13 @@ TAG_SMALL_TUPLE_EXT = 104
 TAG_STRING_EXT = 107
 
 TAG_NEW_PID_EXT = 88
+TAG_NEW_PORT_EXT = 89
 TAG_NEWER_REF_EXT = 90
+TAG_V4_PORT_EXT = 120
+
+# Largest creation of the old tags with an 8-bit creation (PID_EXT,
+# PORT_EXT, REFERENCE_EXT, NEW_REFERENCE_EXT): ERTS_MAX_TINY_CREATION.
+_MAX_TINY_CREATION = 3
 
 # Hooks take and return arbitrary user values, hence Any.
 EncodeHookType = Optional[dict[str, Callable[[Any], Any]]]
@@ -148,6 +156,7 @@ def _inflate(declared: int, compressed: bytes, max_size: int) -> bytes:
 # Big-endian fixed-size fields of the external term format.
 _U16 = struct.Struct(">H")
 _U32 = struct.Struct(">I")
+_U64 = struct.Struct(">Q")
 _I32 = struct.Struct(">i")
 _F64 = struct.Struct(">d")
 
@@ -194,6 +203,10 @@ class _Reader:
 
     def u32(self) -> int:
         value: int = _U32.unpack_from(self.data_, self._need(4))[0]
+        return value
+
+    def u64(self) -> int:
+        value: int = _U64.unpack_from(self.data_, self._need(8))[0]
         return value
 
     def i32(self) -> int:
@@ -604,6 +617,17 @@ def _start_term(dec: _Decoder, reader: _Reader) -> Any:
         creation = reader.u32()
         return Pid(node_name=node, id=id1, serial=serial, creation=creation)
 
+    if tag in (TAG_PORT_EXT, TAG_NEW_PORT_EXT, TAG_V4_PORT_EXT):
+        node = _decode_node(reader)
+        port_id = reader.u64() if tag == TAG_V4_PORT_EXT else reader.u32()
+        if tag == TAG_PORT_EXT:
+            creation = reader.u8()
+            if creation > _MAX_TINY_CREATION:
+                raise PyCodecError("PORT_EXT creation %d is above 3" % creation)
+        else:
+            creation = reader.u32()
+        return Port(node_name=node, id=port_id, creation=creation)
+
     if tag == TAG_NEW_REF_EXT:
         words = reader.u16()
         node = _decode_node(reader)
@@ -701,6 +725,20 @@ def _pack_pid(val: Pid) -> bytes:
         + util.to_u32(val.creation_)
     )
     return data
+
+
+def _pack_port(val: Port) -> bytes:
+    """Always ``V4_PORT_EXT``, as OTP 26+ writes every port."""
+    if not (0 <= val.id_ < 2**64 and 0 <= val.creation_ < 2**32):
+        raise PyCodecError(
+            "Port id %r or creation %r out of range" % (val.id_, val.creation_)
+        )
+    return (
+        bytes([TAG_V4_PORT_EXT])
+        + _pack_atom(val.node_name_)
+        + _U64.pack(val.id_)
+        + _U32.pack(val.creation_)
+    )
 
 
 # TODO: maybe move this into ref class
@@ -920,6 +958,8 @@ def _start_value(
         return (val, itertools.chain(val._elements, (val._tail,)), False)
     elif isinstance(val, Pid):
         out += _pack_pid(val)
+    elif isinstance(val, Port):
+        out += _pack_port(val)
     elif isinstance(val, Reference):
         out += _pack_ref(val)
     elif type_val == bytes:

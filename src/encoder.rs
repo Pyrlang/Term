@@ -270,6 +270,7 @@ impl<'py> Encoder<'py> {
                 return Ok(self.open(term, Children::List(elements), count, After::Tail(tail)));
             }
             "Pid" => self.write_pid(term)?,
+            "Port" => self.write_port(term)?,
             "Reference" => self.write_ref(term)?,
             "bytes" => {
                 let py_bytes = term.cast::<PyBytes>()?;
@@ -461,6 +462,20 @@ impl<'py> Encoder<'py> {
         self.data.push_u32(serial);
         self.data.push_u32(creation);
 
+        Ok(())
+    }
+
+    /// Encode a Port: always V4_PORT_EXT, as OTP 26+ writes every port.
+    fn write_port(&mut self, py_port: &Bound<'py, PyAny>) -> CodecResult<()> {
+        let node_name = py_port.getattr("node_name_")?;
+        let node_name = node_name.cast::<PyString>()?;
+        let id: u64 = py_port.getattr("id_")?.extract()?;
+        let creation: u32 = py_port.getattr("creation_")?.extract()?;
+
+        self.data.push(consts::TAG_V4_PORT_EXT);
+        self.write_atom_from_cow(node_name.to_cow()?)?;
+        self.data.extend(id.to_be_bytes());
+        self.data.push_u32(creation);
         Ok(())
     }
 

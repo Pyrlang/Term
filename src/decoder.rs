@@ -56,6 +56,7 @@ pub struct Decoder<'py> {
     // term.atom.Atom, for node names whatever the "atom" option says.
     cached_node_atom_pyclass: Option<Bound<'py, PyAny>>,
     cached_pid_pyclass: Option<Bound<'py, PyAny>>,
+    cached_port_pyclass: Option<Bound<'py, PyAny>>,
     cached_ref_pyclass: Option<Bound<'py, PyAny>>,
     cached_fun_pyclass: Option<Bound<'py, PyAny>>,
     cached_improper_list_pyclass: Option<Bound<'py, PyAny>>,
@@ -233,6 +234,7 @@ impl<'py> Decoder<'py> {
             cached_atom_pyclass: None,
             cached_node_atom_pyclass: None,
             cached_pid_pyclass: None,
+            cached_port_pyclass: None,
             cached_ref_pyclass: None,
             cached_fun_pyclass: None,
             cached_improper_list_pyclass: None,
@@ -387,6 +389,9 @@ impl<'py> Decoder<'py> {
             }
             consts::TAG_PID_EXT => self.parse_pid(reader),
             consts::TAG_NEW_PID_EXT => self.parse_new_pid(reader),
+            consts::TAG_PORT_EXT | consts::TAG_NEW_PORT_EXT | consts::TAG_V4_PORT_EXT => {
+                self.parse_port(reader, tag)
+            }
             consts::TAG_NEW_REF_EXT => self.parse_ref(reader),
             consts::TAG_NEWER_REF_EXT => self.parse_newer_ref(reader),
             consts::TAG_NEW_FUN_EXT => {
@@ -758,6 +763,32 @@ impl<'py> Decoder<'py> {
 
         let pid_cls = cached_class(self.py, &mut self.cached_pid_pyclass, "term.pid", "Pid")?;
         Ok(pid_cls.call1((node, id, serial, creation))?)
+    }
+
+    /// Given input _after_ a port tag byte (PORT_EXT, NEW_PORT_EXT or
+    /// V4_PORT_EXT), parse a port: 32-bit id except in V4_PORT_EXT (64);
+    /// 8-bit creation, at most 3, in PORT_EXT, else 32.
+    fn parse_port(&mut self, reader: &mut Reader, tag: u8) -> CodecResult<Bound<'py, PyAny>> {
+        let node = self.decode_node_name(reader)?;
+        let id: u64 = if tag == consts::TAG_V4_PORT_EXT {
+            reader.read_u64()?
+        } else {
+            u64::from(reader.read_u32()?)
+        };
+        let creation: u32 = if tag == consts::TAG_PORT_EXT {
+            let tiny = reader.read_u8()?;
+            if tiny > consts::MAX_TINY_CREATION {
+                return Err(CodecError::BadCreation {
+                    what: "PORT_EXT",
+                    creation: tiny,
+                });
+            }
+            u32::from(tiny)
+        } else {
+            reader.read_u32()?
+        };
+        let port_cls = cached_class(self.py, &mut self.cached_port_pyclass, "term.port", "Port")?;
+        Ok(port_cls.call1((node, id, creation))?)
     }
 
     /// Given input _after_ the Reference tag byte, parse an external reference

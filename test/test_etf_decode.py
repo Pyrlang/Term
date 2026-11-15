@@ -13,6 +13,7 @@ from term.bitstring import BitString
 from term.fun import Fun
 from term.list import ImproperList, list_to_unicode_str
 from term.pid import Pid
+from term.port import Port
 from term.reference import Reference
 
 # The golden fixtures written by OTP (TERM-03).
@@ -241,6 +242,45 @@ def test_decode_pid(codec: ModuleType) -> None:
     val, tail = codec.binary_to_term(data, None)
     assert isinstance(val, Pid)
     _assert_expected_tail(tail)
+
+
+# Node fix@host as SMALL_ATOM_UTF8_EXT, as in the golden fixtures.
+_FIX_NODE_ATOM = bytes([119, 8]) + b"fix@host"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # PORT_EXT: ID:32, Creation:8 (at most 3)
+        bytes([102]) + _FIX_NODE_ATOM + (2**28 - 1).to_bytes(4) + bytes([1]),
+        # NEW_PORT_EXT: ID:32, Creation:32
+        bytes([89]) + _FIX_NODE_ATOM + (2**28 - 1).to_bytes(4) + (1).to_bytes(4),
+    ],
+    ids=["PORT_EXT", "NEW_PORT_EXT"],
+)
+def test_decode_old_port_tags(codec: ModuleType, body: bytes) -> None:
+    """The older port tags decode to the same Port as OTP 29's V4_PORT_EXT
+    (fixture port_2p28_minus_1), and encode back as V4_PORT_EXT, as OTP 29
+    re-encodes them (TERM-03)."""
+    v4 = (FIXTURE_DIR / "port_2p28_minus_1.etf").read_bytes()
+    value, tail = codec.binary_to_term(bytes([131]) + body, None)
+    assert tail == b""
+    assert value == Port(Atom("fix@host"), 2**28 - 1, 1)
+    assert value == codec.binary_to_term(v4, None)[0]
+    assert codec.term_to_binary(value, None) == v4
+
+
+def test_decode_port_creation_above_3(codec: ModuleType) -> None:
+    """PORT_EXT has a 2-bit creation (is_tiny_creation in external.c)."""
+    data = bytes([131, 102]) + _FIX_NODE_ATOM + (1).to_bytes(4) + bytes([4])
+    with pytest.raises(codec.PyCodecError, match="creation"):
+        codec.binary_to_term(data, None)
+
+
+@pytest.mark.parametrize("port", [Port("a@b", 2**64, 1), Port("a@b", 1, 2**32)])
+def test_encode_port_out_of_range(codec: ModuleType, port: Port) -> None:
+    with pytest.raises(codec.PyCodecError):
+        codec.term_to_binary(port, None)
 
 
 def test_decode_new_pid(codec: ModuleType) -> None:

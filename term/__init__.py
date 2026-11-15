@@ -5,6 +5,7 @@ from term.bitstring import BitString
 from term.fun import Fun
 from term.list import NIL, ImproperList, List
 from term.pid import Pid
+from term.port import Port
 from term.reference import Reference
 
 __all__ = [
@@ -15,5 +16,6 @@ __all__ = [
     "ImproperList",
     "NIL",
     "Pid",
+    "Port",
     "Reference",
 ]

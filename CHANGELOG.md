@@ -54,3 +54,8 @@
   hooks (`catch_all`, `__etf__`) that keep returning values with no encoding,
   raise `PyCodecError` instead of recursing until the stack runs out. Dicts
   are encoded from a snapshot of their items in the Python codec too.
+- New `term.Port(node_name, id, creation)`. Both codecs decode `PORT_EXT`,
+  `NEW_PORT_EXT` and `V4_PORT_EXT` (64-bit ids, mandatory between OTP 26+
+  nodes) and encode every `Port` as `V4_PORT_EXT`, as OTP does. A port
+  from an OTP node used to raise `Unknown tag`. `PORT_EXT` with a creation
+  above 3 raises `PyCodecError`, as in OTP.

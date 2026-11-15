@@ -40,6 +40,7 @@ pub const TAG_NEW_REF_EXT: u8 = 114;
 pub const TAG_NIL_EXT: u8 = 106;
 
 pub const TAG_PID_EXT: u8 = 103;
+pub const TAG_PORT_EXT: u8 = 102;
 
 pub const TAG_SMALL_ATOM_EXT: u8 = 115;
 pub const TAG_SMALL_ATOM_UTF8_EXT: u8 = 119;
@@ -49,4 +50,10 @@ pub const TAG_SMALL_TUPLE_EXT: u8 = 104;
 pub const TAG_STRING_EXT: u8 = 107;
 
 pub const TAG_NEW_PID_EXT: u8 = 88;
+pub const TAG_NEW_PORT_EXT: u8 = 89;
 pub const TAG_NEWER_REF_EXT: u8 = 90;
+pub const TAG_V4_PORT_EXT: u8 = 120;
+
+/// Largest creation of the old tags with an 8-bit creation (PID_EXT,
+/// PORT_EXT, REFERENCE_EXT, NEW_REFERENCE_EXT): ERTS_MAX_TINY_CREATION.
+pub const MAX_TINY_CREATION: u8 = 3;

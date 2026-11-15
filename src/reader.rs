@@ -40,6 +40,10 @@ impl<'a> Reader<'a> {
         Ok(u32::from_be_bytes(self.read(4)?.try_into()?))
     }
 
+    pub fn read_u64(&mut self) -> ReadResult<u64> {
+        Ok(u64::from_be_bytes(self.read(8)?.try_into()?))
+    }
+
     pub fn read_i32(&mut self) -> ReadResult<i32> {
         Ok(i32::from_be_bytes(self.read(4)?.try_into()?))
     }

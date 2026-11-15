@@ -71,6 +71,9 @@ pub enum CodecError {
     // A pid, port or reference whose node is not an atom (OTP rejects it).
     #[error("Node name must be an atom, found tag {}", b)]
     NodeNotAnAtom { b: u8 },
+    // An 8-bit creation above 3 in an old node-container tag (OTP rejects it).
+    #[error("{what} creation {creation} is above 3")]
+    BadCreation { what: &'static str, creation: u8 },
     #[error("Bad options passed: {}", txt)]
     BadOptions { txt: String },
     // A bitstring whose last byte would hold 0 or more than 8 bits.
