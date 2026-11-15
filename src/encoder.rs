@@ -489,9 +489,13 @@ impl<'py> Encoder<'py> {
         let id = py_id.cast::<PyBytes>()?.as_bytes();
 
         let creation: u32 = py_ref.getattr("creation_")?.extract()?;
+        let words = match u16::try_from(id.len() / 4) {
+            Ok(w) if id.len() % 4 == 0 && (1..=consts::MAX_REF_WORDS).contains(&w) => w,
+            _ => return Err(CodecError::BadRefId { size: id.len() }),
+        };
 
         self.data.push(consts::TAG_NEWER_REF_EXT);
-        self.data.push_u16((id.len() / 4) as u16);
+        self.data.push_u16(words);
         self.write_atom_from_cow(node_name.to_cow()?)?;
         self.data.push_u32(creation);
         self.data.extend_from_slice(id);

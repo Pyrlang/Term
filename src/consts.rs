@@ -41,6 +41,7 @@ pub const TAG_NIL_EXT: u8 = 106;
 
 pub const TAG_PID_EXT: u8 = 103;
 pub const TAG_PORT_EXT: u8 = 102;
+pub const TAG_REFERENCE_EXT: u8 = 101;
 
 pub const TAG_SMALL_ATOM_EXT: u8 = 115;
 pub const TAG_SMALL_ATOM_UTF8_EXT: u8 = 119;
@@ -57,3 +58,10 @@ pub const TAG_V4_PORT_EXT: u8 = 120;
 /// Largest creation of the old tags with an 8-bit creation (PID_EXT,
 /// PORT_EXT, REFERENCE_EXT, NEW_REFERENCE_EXT): ERTS_MAX_TINY_CREATION.
 pub const MAX_TINY_CREATION: u8 = 3;
+
+/// Most ID words in a reference (ERTS_MAX_REF_NUMBERS, OTP 24+).
+pub const MAX_REF_WORDS: u16 = 5;
+
+/// The first ID word of REFERENCE_EXT and NEW_REFERENCE_EXT is below this
+/// (MAX_REFERENCE: 18 bits).
+pub const MAX_OLD_REF_FIRST_WORD: u32 = 1 << 18;

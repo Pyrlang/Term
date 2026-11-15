@@ -11,15 +11,21 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import itertools
 import random
 import struct
-import time
-from typing import Union
 
 from term import Atom, util
 from term.basetypes import BaseRef, Term
 
 REF_MARKER = "pyrlang.Ref"
+
+# Numbers the references that Reference.create makes in this process, so
+# that no two of them are equal.
+_CREATED = itertools.count(1)
+
+# The 3 ID words of a created reference.
+_REF_WORDS = struct.Struct(">III")
 
 
 class Reference(BaseRef):
@@ -29,14 +35,22 @@ class Reference(BaseRef):
 
     @staticmethod
     def create(node_name: str, creation: int) -> "Reference":
-        """Construct a (most possibly) unique ref with random bytes and time
+        """A new reference of node ``node_name``, unequal to every other
+        reference this process creates.
+
+        Its 3 ID words hold a per-process counter (the low 18 bits in the
+        first word, the next 32 in the second) and 32 random bits (third),
+        so a restarted node is unlikely to repeat references it made before.
+
         :param node_name: string, not a Node object
-        :param creation: int value 0, 1 or 2 from node's distribution object
+        :param creation: the creation of the node's distribution
         :rtype: term.reference.Reference
         """
-        rand_val = int(time.monotonic() * 1000000) + random.randrange(1000000)
-        rand_bytes = rand_val.to_bytes(length=12, byteorder="big", signed=False)
-        return Reference(node_name=node_name, creation=creation, refid=rand_bytes)
+        n = next(_CREATED)
+        refid = _REF_WORDS.pack(
+            n & 0x3FFFF, (n >> 18) & 0xFFFFFFFF, random.getrandbits(32)
+        )
+        return Reference(node_name=node_name, creation=creation, refid=refid)
 
     def __init__(self, node_name: Term, creation: int, refid: bytes) -> None:
         self.node_name_ = Atom.from_string_or_atom(node_name)

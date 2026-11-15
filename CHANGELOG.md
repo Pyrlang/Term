@@ -59,3 +59,13 @@
   nodes) and encode every `Port` as `V4_PORT_EXT`, as OTP does. A port
   from an OTP node used to raise `Unknown tag`. `PORT_EXT` with a creation
   above 3 raises `PyCodecError`, as in OTP.
+- References: both codecs decode `REFERENCE_EXT` (one word) and reject what
+  OTP 29 rejects: more than 5 ID words, `NEW_REFERENCE_EXT` with no words or
+  a first word of more than 18 bits, an 8-bit creation above 3 in
+  `PID_EXT`, `REFERENCE_EXT` and `NEW_REFERENCE_EXT`. A`n  `NEWER_REFERENCE_EXT` with no ID words is rejected too (OTP 29 accepts it,
+  reading past the term). Encoding a `Reference` whose ID is not 1..5 whole
+  words, or a `Pid` field beyond 32 bits, raises `PyCodecError` (the Python
+  codec raised `struct.error` or wrote a broken term).
+- `Reference.create` numbers references with a per-process counter plus 32
+  random bits, so two created references are never equal (it used a clock
+  value plus a random number).

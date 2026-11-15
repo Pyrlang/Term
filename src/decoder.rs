@@ -392,6 +392,7 @@ impl<'py> Decoder<'py> {
             consts::TAG_PORT_EXT | consts::TAG_NEW_PORT_EXT | consts::TAG_V4_PORT_EXT => {
                 self.parse_port(reader, tag)
             }
+            consts::TAG_REFERENCE_EXT => self.parse_old_ref(reader),
             consts::TAG_NEW_REF_EXT => self.parse_ref(reader),
             consts::TAG_NEWER_REF_EXT => self.parse_newer_ref(reader),
             consts::TAG_NEW_FUN_EXT => {
@@ -739,14 +740,16 @@ impl<'py> Decoder<'py> {
         Ok(atom_cls.call1((txt,))?)
     }
 
-    /// Given input _after_ the PID tag byte, parse an external pid
+    /// Given input _after_ the PID tag byte, parse an external pid. ID and
+    /// Serial are not limited for a remote node (OTP 29's dec_pid checks them
+    /// only for its own pids); Creation is.
     #[inline]
     fn parse_pid(&mut self, reader: &mut Reader) -> CodecResult<Bound<'py, PyAny>> {
         let node = self.decode_node_name(reader)?;
 
         let id: u32 = reader.read_u32()?;
         let serial: u32 = reader.read_u32()?;
-        let creation: u8 = reader.read_u8()?;
+        let creation = read_tiny_creation(reader, "PID_EXT")?;
 
         let pid_cls = cached_class(self.py, &mut self.cached_pid_pyclass, "term.pid", "Pid")?;
         Ok(pid_cls.call1((node, id, serial, creation))?)
@@ -776,14 +779,7 @@ impl<'py> Decoder<'py> {
             u64::from(reader.read_u32()?)
         };
         let creation: u32 = if tag == consts::TAG_PORT_EXT {
-            let tiny = reader.read_u8()?;
-            if tiny > consts::MAX_TINY_CREATION {
-                return Err(CodecError::BadCreation {
-                    what: "PORT_EXT",
-                    creation: tiny,
-                });
-            }
-            u32::from(tiny)
+            u32::from(read_tiny_creation(reader, "PORT_EXT")?)
         } else {
             reader.read_u32()?
         };
@@ -791,38 +787,42 @@ impl<'py> Decoder<'py> {
         Ok(port_cls.call1((node, id, creation))?)
     }
 
-    /// Given input _after_ the Reference tag byte, parse an external reference
-    #[inline]
-    fn parse_ref(&mut self, reader: &mut Reader) -> CodecResult<Bound<'py, PyAny>> {
-        let term_len = reader.read_u16()? as usize;
+    /// Given input _after_ the REFERENCE_EXT tag byte (deprecated): Node,
+    /// one ID word of 18 bits, 8-bit Creation.
+    fn parse_old_ref(&mut self, reader: &mut Reader) -> CodecResult<Bound<'py, PyAny>> {
         let node = self.decode_node_name(reader)?;
-
-        let creation: u8 = reader.read_u8()?;
-
-        let id: &[u8] = reader.read(term_len * 4)?;
-        let bytes_id = PyBytes::new(self.py, id);
-
-        let ref_cls = cached_class(
-            self.py,
-            &mut self.cached_ref_pyclass,
-            "term.reference",
-            "Reference",
-        )?;
-        Ok(ref_cls.call1((node, creation, bytes_id))?)
+        let id = first_ref_word(reader.read(4)?, "REFERENCE_EXT")?;
+        let creation = u32::from(read_tiny_creation(reader, "REFERENCE_EXT")?);
+        self.make_ref(node, creation, id)
     }
 
-    /// Given input _after_ the Newer Reference tag byte, parse an external reference
-    #[inline]
-    fn parse_newer_ref(&mut self, reader: &mut Reader) -> CodecResult<Bound<'py, PyAny>> {
-        let term_len = reader.read_u16()? as usize;
+    /// Given input _after_ the NEW_REFERENCE_EXT tag byte: Len, Node, 8-bit
+    /// Creation, Len ID words, the first of 18 bits.
+    fn parse_ref(&mut self, reader: &mut Reader) -> CodecResult<Bound<'py, PyAny>> {
+        let words = read_ref_words(reader, "NEW_REFERENCE_EXT")?;
         let node = self.decode_node_name(reader)?;
+        let creation = u32::from(read_tiny_creation(reader, "NEW_REFERENCE_EXT")?);
+        let id = first_ref_word(reader.read(words * 4)?, "NEW_REFERENCE_EXT")?;
+        self.make_ref(node, creation, id)
+    }
 
+    /// Given input _after_ the NEWER_REFERENCE_EXT tag byte: Len, Node,
+    /// 32-bit Creation, Len ID words.
+    fn parse_newer_ref(&mut self, reader: &mut Reader) -> CodecResult<Bound<'py, PyAny>> {
+        let words = read_ref_words(reader, "NEWER_REFERENCE_EXT")?;
+        let node = self.decode_node_name(reader)?;
         let creation: u32 = reader.read_u32()?;
+        let id = reader.read(words * 4)?;
+        self.make_ref(node, creation, id)
+    }
 
-        // Any length is accepted for now; TERM-11 limits it to 1..5 words.
-        let id: &[u8] = reader.read(term_len * 4)?;
+    fn make_ref(
+        &mut self,
+        node: Bound<'py, PyAny>,
+        creation: u32,
+        id: &[u8],
+    ) -> CodecResult<Bound<'py, PyAny>> {
         let bytes_id = PyBytes::new(self.py, id);
-
         let ref_cls = cached_class(
             self.py,
             &mut self.cached_ref_pyclass,
@@ -833,6 +833,36 @@ impl<'py> Decoder<'py> {
     }
 }
 // end impl
+
+/// Read the 8-bit Creation of an old node-container tag: at most 3
+/// (`is_tiny_creation` in OTP's external.c).
+fn read_tiny_creation(reader: &mut Reader, what: &'static str) -> CodecResult<u8> {
+    let creation = reader.read_u8()?;
+    if creation > consts::MAX_TINY_CREATION {
+        return Err(CodecError::BadCreation { what, creation });
+    }
+    Ok(creation)
+}
+
+/// Read the ID word count of a reference: 1 to 5 (`ERTS_MAX_REF_NUMBERS`).
+/// OTP 29 also decodes a NEWER_REFERENCE_EXT with no words, but only by
+/// reading its first word from beyond the term; we reject it.
+fn read_ref_words(reader: &mut Reader, what: &'static str) -> CodecResult<usize> {
+    let words = reader.read_u16()?;
+    if !(1..=consts::MAX_REF_WORDS).contains(&words) {
+        return Err(CodecError::BadRefWords { what, words });
+    }
+    Ok(usize::from(words))
+}
+
+/// `id` if its first word fits the 18 bits that the tags with an 8-bit
+/// creation allow (`MAX_REFERENCE` in OTP).
+fn first_ref_word<'a>(id: &'a [u8], what: &'static str) -> CodecResult<&'a [u8]> {
+    match id.first_chunk::<4>() {
+        Some(word) if u32::from_be_bytes(*word) < consts::MAX_OLD_REF_FIRST_WORD => Ok(id),
+        _ => Err(CodecError::BadRefFirstWord { what }),
+    }
+}
 
 /// Read the length (a `T`) and the UTF-8 text of an atom.
 fn read_utf8_text<'a, T>(reader: &mut Reader<'a>) -> CodecResult<Cow<'a, str>>
@@ -861,8 +891,26 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::inflate;
+    use super::{first_ref_word, inflate, read_ref_words, read_tiny_creation};
     use crate::errors::CodecError;
+    use crate::reader::Reader;
+
+    #[test]
+    fn node_container_limits() {
+        let ok: &[u8] = &[3, 0, 1, 0, 5];
+        let mut r = Reader::from(ok);
+        assert_eq!(read_tiny_creation(&mut r, "t").unwrap(), 3);
+        assert_eq!(read_ref_words(&mut r, "t").unwrap(), 1);
+        assert_eq!(read_ref_words(&mut r, "t").unwrap(), 5);
+        let bad: &[u8] = &[4, 0, 0, 0, 6];
+        let mut r = Reader::from(bad);
+        assert!(read_tiny_creation(&mut r, "t").is_err());
+        assert!(read_ref_words(&mut r, "t").is_err());
+        assert!(read_ref_words(&mut r, "t").is_err());
+        assert!(first_ref_word(&[0, 3, 255, 255], "t").is_ok());
+        assert!(first_ref_word(&[0, 4, 0, 0], "t").is_err());
+        assert!(first_ref_word(&[], "t").is_err());
+    }
     use flate2::{write::ZlibEncoder, Compression};
     use std::io::Write;
 

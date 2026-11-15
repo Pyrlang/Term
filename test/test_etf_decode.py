@@ -277,6 +277,69 @@ def test_decode_port_creation_above_3(codec: ModuleType) -> None:
         codec.binary_to_term(data, None)
 
 
+# Node a@b as SMALL_ATOM_UTF8_EXT.
+_A_B = bytes([119, 3]) + b"a@b"
+
+
+@pytest.mark.parametrize(
+    "data,otp29",
+    [
+        # PID_EXT: ID and Serial are not limited for a remote node.
+        (
+            bytes([131, 103]) + _A_B + b"\xff" * 8 + bytes([3]),
+            bytes([131, 88]) + _A_B + b"\xff" * 8 + (3).to_bytes(4),
+        ),
+        # REFERENCE_EXT: one word of at most 18 bits, creation at most 3.
+        (
+            bytes([131, 101]) + _A_B + (5).to_bytes(4) + bytes([2]),
+            bytes([131, 90, 0, 1]) + _A_B + (2).to_bytes(4) + (5).to_bytes(4),
+        ),
+        # NEW_REFERENCE_EXT, first word 2^18-1.
+        (
+            bytes([131, 114, 0, 3])
+            + _A_B
+            + bytes([1])
+            + b"".join(w.to_bytes(4) for w in (2**18 - 1, 2, 3)),
+            bytes([131, 90, 0, 3])
+            + _A_B
+            + (1).to_bytes(4)
+            + b"".join(w.to_bytes(4) for w in (2**18 - 1, 2, 3)),
+        ),
+    ],
+    ids=["PID_EXT", "REFERENCE_EXT", "NEW_REFERENCE_EXT"],
+)
+def test_decode_old_node_container_tags(
+    codec: ModuleType, data: bytes, otp29: bytes
+) -> None:
+    """Old tags decode and encode back to what OTP 29's
+    ``term_to_binary(binary_to_term(Data))`` gives (``otp29``)."""
+    value, tail = codec.binary_to_term(data, None)
+    assert tail == b""
+    assert codec.term_to_binary(value, None) == otp29
+    assert value == codec.binary_to_term(otp29, None)[0]
+
+
+def test_decode_newer_ref_without_words(codec: ModuleType) -> None:
+    """OTP 29 decodes this by reading the first ID word past the end of the
+    term; we refuse a reference with no ID words."""
+    data = bytes([131, 90, 0, 0]) + _A_B + (1).to_bytes(4)
+    with pytest.raises(codec.PyCodecError, match="ID words"):
+        codec.binary_to_term(data, None)
+
+
+@pytest.mark.parametrize("refid", [b"", b"\x00" * 24, b"\x00" * 5])
+def test_encode_ref_words(codec: ModuleType, refid: bytes) -> None:
+    """A Reference encodes only with 1..5 whole ID words."""
+    with pytest.raises(codec.PyCodecError, match="Reference ID"):
+        codec.term_to_binary(Reference("a@b", 1, refid), None)
+
+
+def test_reference_create_is_distinct() -> None:
+    refs = {Reference.create("py@host", 1) for _ in range(10_000)}
+    assert len(refs) == 10_000
+    assert all(len(r.id_) == 12 for r in refs)
+
+
 @pytest.mark.parametrize("port", [Port("a@b", 2**64, 1), Port("a@b", 1, 2**32)])
 def test_encode_port_out_of_range(codec: ModuleType, port: Port) -> None:
     with pytest.raises(codec.PyCodecError):

@@ -61,6 +61,7 @@ TAG_NIL_EXT = 106
 
 TAG_PID_EXT = 103
 TAG_PORT_EXT = 102
+TAG_REFERENCE_EXT = 101
 
 TAG_SMALL_ATOM_EXT = 115
 TAG_SMALL_ATOM_UTF8_EXT = 119
@@ -77,6 +78,13 @@ TAG_V4_PORT_EXT = 120
 # Largest creation of the old tags with an 8-bit creation (PID_EXT,
 # PORT_EXT, REFERENCE_EXT, NEW_REFERENCE_EXT): ERTS_MAX_TINY_CREATION.
 _MAX_TINY_CREATION = 3
+
+# Most ID words in a reference (ERTS_MAX_REF_NUMBERS, OTP 24+).
+_MAX_REF_WORDS = 5
+
+# The first ID word of REFERENCE_EXT and NEW_REFERENCE_EXT is below this
+# (MAX_REFERENCE: 18 bits).
+_MAX_OLD_REF_FIRST_WORD = 1 << 18
 
 # Hooks take and return arbitrary user values, hence Any.
 EncodeHookType = Optional[dict[str, Callable[[Any], Any]]]
@@ -558,6 +566,34 @@ class _Frame:
         return fun, False
 
 
+def _tiny_creation(reader: _Reader, what: str) -> int:
+    """The 8-bit Creation of an old node-container tag: at most 3
+    (``is_tiny_creation`` in OTP's external.c)."""
+    creation = reader.u8()
+    if creation > _MAX_TINY_CREATION:
+        raise PyCodecError("%s creation %d is above 3" % (what, creation))
+    return creation
+
+
+def _ref_words(reader: _Reader, what: str) -> int:
+    """The ID word count of a reference: 1 to 5 (``ERTS_MAX_REF_NUMBERS``).
+
+    OTP 29 also decodes a ``NEWER_REFERENCE_EXT`` with no words, but only by
+    reading its first word from beyond the term; we reject it."""
+    words = reader.u16()
+    if not 1 <= words <= _MAX_REF_WORDS:
+        raise PyCodecError("%s has %d ID words, expected 1..5" % (what, words))
+    return words
+
+
+def _first_ref_word(refid: bytes, what: str) -> bytes:
+    """``refid`` if its first word fits the 18 bits that the tags with an
+    8-bit creation allow (``MAX_REFERENCE`` in OTP)."""
+    if _U32.unpack_from(refid)[0] >= _MAX_OLD_REF_FIRST_WORD:
+        raise PyCodecError("%s first ID word is above 18 bits" % what)
+    return refid
+
+
 def _count(reader: _Reader, count: int, per_element: int, what: str) -> int:
     """``count`` if the input can hold that many elements of at least
     ``per_element`` bytes each; checked before anything is allocated."""
@@ -604,10 +640,12 @@ def _start_term(dec: _Decoder, reader: _Reader) -> Any:
         return reader.i32()
 
     if tag == TAG_PID_EXT:
+        # ID and Serial are not limited for a remote node (OTP 29's dec_pid
+        # checks them only for its own pids); Creation is.
         node = _decode_node(reader)
         id1 = reader.u32()
         serial = reader.u32()
-        creation = reader.u8()
+        creation = _tiny_creation(reader, "PID_EXT")
         return Pid(node_name=node, id=id1, serial=serial, creation=creation)
 
     if tag == TAG_NEW_PID_EXT:
@@ -621,23 +659,26 @@ def _start_term(dec: _Decoder, reader: _Reader) -> Any:
         node = _decode_node(reader)
         port_id = reader.u64() if tag == TAG_V4_PORT_EXT else reader.u32()
         if tag == TAG_PORT_EXT:
-            creation = reader.u8()
-            if creation > _MAX_TINY_CREATION:
-                raise PyCodecError("PORT_EXT creation %d is above 3" % creation)
+            creation = _tiny_creation(reader, "PORT_EXT")
         else:
             creation = reader.u32()
         return Port(node_name=node, id=port_id, creation=creation)
 
-    if tag == TAG_NEW_REF_EXT:
-        words = reader.u16()
+    if tag == TAG_REFERENCE_EXT:
         node = _decode_node(reader)
-        creation = reader.u8()
-        return Reference(
-            node_name=node, creation=creation, refid=reader.read(4 * words)
-        )
+        refid = _first_ref_word(reader.read(4), "REFERENCE_EXT")
+        creation = _tiny_creation(reader, "REFERENCE_EXT")
+        return Reference(node_name=node, creation=creation, refid=refid)
+
+    if tag == TAG_NEW_REF_EXT:
+        words = _ref_words(reader, "NEW_REFERENCE_EXT")
+        node = _decode_node(reader)
+        creation = _tiny_creation(reader, "NEW_REFERENCE_EXT")
+        refid = _first_ref_word(reader.read(4 * words), "NEW_REFERENCE_EXT")
+        return Reference(node_name=node, creation=creation, refid=refid)
 
     if tag == TAG_NEWER_REF_EXT:
-        words = reader.u16()
+        words = _ref_words(reader, "NEWER_REFERENCE_EXT")
         node = _decode_node(reader)
         creation = reader.u32()
         return Reference(
@@ -715,16 +756,17 @@ def _pack_atom(text: str) -> bytes:
     return bytes([TAG_ATOM_UTF8_EXT]) + util.to_u16(len(atom_bytes)) + atom_bytes
 
 
-# TODO: maybe move this into pid class
 def _pack_pid(val: Pid) -> bytes:
-    data = (
-        bytes([TAG_NEW_PID_EXT])
-        + _pack_atom(val.node_name_)
-        + util.to_u32(val.id_)
-        + util.to_u32(val.serial_)
-        + util.to_u32(val.creation_)
-    )
-    return data
+    """``NEW_PID_EXT``: ID, Serial and Creation are 32 bits each."""
+    try:
+        fields = _PID_FIELDS.pack(val.id_, val.serial_, val.creation_)
+    except struct.error as e:
+        raise PyCodecError("Pid field out of range: %s" % e) from e
+    return bytes([TAG_NEW_PID_EXT]) + _pack_atom(val.node_name_) + fields
+
+
+# ID, Serial and Creation of NEW_PID_EXT.
+_PID_FIELDS = struct.Struct(">III")
 
 
 def _pack_port(val: Port) -> bytes:
@@ -741,16 +783,22 @@ def _pack_port(val: Port) -> bytes:
     )
 
 
-# TODO: maybe move this into ref class
 def _pack_ref(val: Reference) -> bytes:
-    data = (
+    """``NEWER_REFERENCE_EXT`` with 1 to 5 ID words."""
+    words, rest = divmod(len(val.id_), 4)
+    if rest or not 1 <= words <= _MAX_REF_WORDS:
+        raise PyCodecError(
+            "Reference ID of %d bytes; expected 1..5 words of 4 bytes" % len(val.id_)
+        )
+    if not 0 <= val.creation_ < 2**32:
+        raise PyCodecError("Reference creation %r out of range" % (val.creation_,))
+    return (
         bytes([TAG_NEWER_REF_EXT])
-        + util.to_u16(len(val.id_) // 4)
+        + util.to_u16(words)
         + _pack_atom(val.node_name_)
-        + util.to_u32(val.creation_)
+        + _U32.pack(val.creation_)
         + val.id_
     )
-    return data
 
 
 def _is_a_simple_object(obj: object) -> bool:

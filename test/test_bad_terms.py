@@ -13,9 +13,10 @@ Inputs:
   ``binary_to_term`` and expect to fail (``binary_SUITE``: ``bad_terms``,
   ``more_bad_terms``, ``bad_binary_to_term``, ``bad_binary_to_term_2``,
   ``otp_5484``, ``otp_5933``, ``otp_6817``, ``otp_8117``, ``otp_8180``;
-  ``node_container_SUITE:bad_nc``), and ``limits.*`` (plan step TERM-09:
-  counts larger than the input, broken compressed terms). Each must be
-  rejected.
+  ``node_container_SUITE:bad_nc``), ``limits.*`` (plan step TERM-09:
+  counts larger than the input, broken compressed terms) and
+  ``node_containers.*`` (TERM-11: reference word counts and old-tag values
+  out of range). Each must be rejected.
 - Every fixture of both OTP-written sets (TERM-03, TERM-04), broken by the
   generators of ``etf_mutations.py``: truncated (must be rejected), a length
   field maxed out (must be rejected), and single bytes corrupted as OTP's
@@ -344,6 +345,19 @@ def _limits() -> Iterator[BadVector]:
     )
 
 
+def _node_containers() -> Iterator[BadVector]:
+    # Plan step TERM-11: references and old-tag pids outside the limits of
+    # OTP 29's external.c (dec_pid, the REFERENCE_EXT cases), checked against
+    # OTP by test_otp_rejects_them_too. Node a@b.
+    node = bytes([119, 3]) + b"a@b"
+    words = b"".join(_u32(w) for w in (1, 2, 3, 4, 5, 6))
+    yield BadVector("newer_ref_6_words", b"\x83Z\x00\x06" + node + _u32(1) + words)
+    yield BadVector("new_ref_6_words", b"\x83r\x00\x06" + node + b"\x01" + words)
+    yield BadVector("new_ref_0_words", b"\x83r\x00\x00" + node + b"\x01")
+    yield BadVector("ref_ext_word_2p18", b"\x83e" + node + _u32(1 << 18) + b"\x02")
+    yield BadVector("ref_ext_creation_4", b"\x83e" + node + _u32(5) + b"\x04")
+
+
 def _otp_8180() -> Iterator[BadVector]:
     # From binary_SUITE:otp_8180 (binary_SUITE_data/zzz.terms.*)
     for path in sorted(BAD_DIR.glob("binary_SUITE.otp_8180.*.etf")):
@@ -363,6 +377,7 @@ def _all_bad_vectors() -> list[BadVector]:
         "binary_SUITE.otp_8180": _otp_8180,
         "node_container_SUITE.bad_nc": _bad_nc,
         "limits": _limits,
+        "node_containers": _node_containers,
     }
     return [
         BadVector("%s.%s" % (origin, v.name), v.data)
@@ -607,10 +622,6 @@ def _vector_blocks() -> tuple[dict[str, str], dict[tuple[str, str], str]]:
     for n in ("bad_module", "bad_index", "bad_uniq"):
         both[b + "otp_5484.new_fun_" + n] = "TERM-13"
     both[b + "otp_5484.fake_fun_257_free"] = "TERM-13"
-    # Node container values out of range for their tag.
-    both[b + "otp_5484.pid_bad_values"] = "TERM-11"
-    for n in ("ref_first_word_2p18", "ref_7_words", "pid_creation_4", "ref_creation_4"):
-        both["node_container_SUITE.bad_nc." + n] = "TERM-11"
     return both, by
 
 

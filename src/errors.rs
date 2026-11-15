@@ -74,6 +74,15 @@ pub enum CodecError {
     // An 8-bit creation above 3 in an old node-container tag (OTP rejects it).
     #[error("{what} creation {creation} is above 3")]
     BadCreation { what: &'static str, creation: u8 },
+    // A reference with no ID words or more than 5 (decoding or encoding).
+    #[error("{what} has {words} ID words, expected 1..5")]
+    BadRefWords { what: &'static str, words: u16 },
+    // REFERENCE_EXT or NEW_REFERENCE_EXT whose first ID word exceeds 18 bits.
+    #[error("{what} first ID word is above 18 bits")]
+    BadRefFirstWord { what: &'static str },
+    // A Reference to encode whose ID is not 1..5 words of 4 bytes.
+    #[error("Reference ID of {size} bytes; expected 1..5 words of 4 bytes")]
+    BadRefId { size: usize },
     #[error("Bad options passed: {}", txt)]
     BadOptions { txt: String },
     // A bitstring whose last byte would hold 0 or more than 8 bits.
