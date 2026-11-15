@@ -151,9 +151,11 @@ features_text(Features) ->
 %%   bytes), float_ext (a float written with {minor_version, 0}),
 %%   int_bits_32 (2^31 =< |I| < 2^32, except -2^31), str_latin1 (a list
 %%   written as STRING_EXT holding a byte >= 128), unhashable_key (a map key
-%%   whose Python value would be a list or a dict).
+%%   whose Python value would be a list or a dict), local_ext (written with
+%%   the `local` option: only this node can decode it).
 features(Term, Opts) ->
-    lists:usort(feat(Term, lists:member({minor_version, 0}, Opts), [])).
+    Local = [local_ext || lists:member(local, Opts)],
+    lists:usort(Local ++ feat(Term, lists:member({minor_version, 0}, Opts), [])).
 
 feat(T, _, Acc) when is_integer(T) ->
     A = abs(T),
@@ -277,7 +279,7 @@ pretty(Source) ->
 fixtures() ->
     integers() ++ floats() ++ atoms() ++ strings() ++ lists() ++ tuples()
         ++ maps() ++ binaries() ++ compressed() ++ node_containers()
-        ++ funs() ++ records().
+        ++ funs() ++ records() ++ local().
 
 integers() ->
     [?F(int_0, stable, 0),
@@ -382,6 +384,16 @@ records() ->
      ?F(record_local, stable, #fix_local{x = {1, 2}})].
 -else.
 records() ->
+    [].
+-endif.
+
+%% term_to_binary(T, [local]) (OTP 26+): LOCAL_EXT, which only the node
+%% that wrote it can decode; its bytes depend on the node.
+-if(?OTP_RELEASE >= 26).
+local() ->
+    [?F(local_ext, volatile, {a, 1}, [local])].
+-else.
+local() ->
     [].
 -endif.
 

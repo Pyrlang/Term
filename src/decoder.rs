@@ -413,6 +413,7 @@ impl<'py> Decoder<'py> {
             consts::TAG_REFERENCE_EXT => self.parse_old_ref(reader),
             consts::TAG_NEW_REF_EXT => self.parse_ref(reader),
             consts::TAG_NEWER_REF_EXT => self.parse_newer_ref(reader),
+            consts::TAG_LOCAL_EXT => Err(CodecError::LocalExt),
             consts::TAG_EXPORT_EXT => self.parse_export(reader),
             consts::TAG_NEW_FUN_EXT => return self.start_fun(reader),
             _ => Err(CodecError::UnknownTermTagByte { b: tag }),

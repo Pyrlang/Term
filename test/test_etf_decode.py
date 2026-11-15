@@ -1783,6 +1783,15 @@ def test_decode_float_ext_without_nul(codec: ModuleType) -> None:
         codec.binary_to_term(data, None)
 
 
+def test_decode_local_ext(codec: ModuleType) -> None:
+    """term_to_binary({a, 1}, [local]) from OTP 29 (fixture local_ext): the
+    error says what the term is, not just "unknown tag"."""
+    data = (FIXTURE_DIR / "local_ext.etf").read_bytes()
+    assert data[1] == 121
+    with pytest.raises(codec.PyCodecError, match="LOCAL_EXT"):
+        codec.binary_to_term(data, None)
+
+
 def test_decode_compressed(codec: ModuleType) -> None:
     """tries to decode compressed data: what OTP 29 writes for
     term_to_binary(<<"Lorem...">>, [compressed]). The vector used before had

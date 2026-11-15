@@ -36,9 +36,10 @@ ROUNDTRIP_BLOCKED: dict[str, str] = {}
 
 ROUNDTRIP_BLOCKED_BY: dict[tuple[str, str], str] = {}
 
-# Terms with no Python value (a map key that would be a list or a dict):
-# decoding must raise PyCodecError.
-REJECTED_FEATURE = "unhashable_key"
+# Terms with no Python value (a map key that would be a list or a dict),
+# and terms only the node that wrote them can decode (LOCAL_EXT): decoding
+# must raise PyCodecError.
+REJECTED_FEATURES = frozenset({"unhashable_key", "local_ext"})
 
 # Codecs that get the rejection wrong yet: codec id -> plan step.
 REJECTED_WRONGLY_BY: dict[str, str] = {}

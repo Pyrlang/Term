@@ -54,6 +54,7 @@ TAG_INT = 98
 TAG_LARGE_BIG_EXT = 111
 TAG_LARGE_TUPLE_EXT = 105
 TAG_LIST_EXT = 108
+TAG_LOCAL_EXT = 121
 
 TAG_MAP_EXT = 116
 
@@ -811,6 +812,12 @@ def _start_term(dec: _Decoder, reader: _Reader) -> Any:
         # Data is encoded little-endian as bytes (least significant first)
         result = int.from_bytes(reader.read(nbytes), byteorder="little")
         return -result if sign != 0 else result
+
+    if tag == TAG_LOCAL_EXT:
+        raise PyCodecError(
+            "LOCAL_EXT (term_to_binary with the local option) can only be "
+            "decoded by the node that encoded it"
+        )
 
     if tag == TAG_EXPORT_EXT:
         module = _decode_plain_atom(reader, "EXPORT_EXT module")

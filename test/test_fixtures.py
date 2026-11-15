@@ -67,9 +67,10 @@ NOT_DECODED: dict[str, str] = {
 # Fixtures that one codec does not decode yet: (name, codec id) -> plan step.
 NOT_DECODED_BY: dict[tuple[str, str], str] = {}
 
-# Terms with no Python value (a map key that a dict cannot hold): decoding
-# must raise PyCodecError.
-REJECTED = {"map_list_key", "map_map_key"}
+# Terms with no Python value (a map key that a dict cannot hold), and
+# LOCAL_EXT, which only the node that wrote it can decode: decoding must
+# raise PyCodecError.
+REJECTED = {"map_list_key", "map_map_key", "local_ext"}
 
 # Rejections that one codec gets wrong yet: (name, codec id) -> plan step.
 REJECTED_WRONGLY_BY: dict[tuple[str, str], str] = {}

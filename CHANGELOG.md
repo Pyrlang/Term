@@ -95,3 +95,6 @@
   bytes, a UTF-8 one up to 1020. Both codecs used to accept up to 65535 bytes.
   An atom text that is not valid Unicode raises `PyCodecError` in the Python
   encoder (was `UnicodeEncodeError`).
+- `LOCAL_EXT` (`term_to_binary(T, [local])`, OTP 26+) raises `PyCodecError`
+  saying that only the node that encoded it can decode it, instead of
+  `Unknown tag 121`.

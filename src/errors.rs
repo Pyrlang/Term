@@ -71,6 +71,11 @@ pub enum CodecError {
     // A decoded map key that a Python dict cannot hold (a list, a dict).
     #[error("Map key of type {type_name} is not hashable")]
     UnhashableKey { type_name: String, error: PyErr },
+    // term_to_binary(T, [local]) output: private to the node that wrote it.
+    #[error(
+        "LOCAL_EXT (term_to_binary with the local option) can only be decoded by the node that encoded it"
+    )]
+    LocalExt,
     #[error("Unrecognized term tag byte: {}", b)]
     UnknownTermTagByte { b: u8 },
     // A pid, port or reference whose node is not an atom, or an export fun

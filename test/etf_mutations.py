@@ -135,6 +135,8 @@ class _Walker:
             return self._terms(pos + 30, 4 + num_free)
         if tag == 113:  # EXPORT_EXT: Module, Function, Arity
             return self._terms(pos + 1, 3)
+        if tag == 121:  # LOCAL_EXT: private to the node that wrote it
+            return len(self.data_)
         if tag == 67:  # RECORD_EXT: #Fields, Flags, Module, Name, names, values
             count = self._len(pos + 1, 4, tag)
             return self._terms(pos + 6, 2 + 2 * count)

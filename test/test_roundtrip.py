@@ -22,7 +22,7 @@ import pytest
 from fixture_manifest import (
     FIXTURE_DIR,
     OTP_VECTOR_DIR,
-    REJECTED_FEATURE,
+    REJECTED_FEATURES,
     Vector,
     codec_id,
     load_vectors,
@@ -45,12 +45,12 @@ CHECKER_SRC = Path(__file__).parent / "erl" / "check_roundtrip.erl"
 SETS: dict[str, Path] = {"golden": FIXTURE_DIR, "otp": OTP_VECTOR_DIR}
 
 # (set name, vector) for every vector that has a Python value: terms whose
-# map keys Python cannot hash are rejected by design and have none.
+# map keys Python cannot hash, and LOCAL_EXT, are rejected by design.
 CASES = [
     (set_name, v)
     for set_name, directory in SETS.items()
     for v in load_vectors(directory)
-    if REJECTED_FEATURE not in v.features
+    if not REJECTED_FEATURES & v.features
 ]
 
 

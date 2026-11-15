@@ -33,6 +33,7 @@ pub const TAG_INT: u8 = 98;
 pub const TAG_LARGE_BIG_EXT: u8 = 111;
 pub const TAG_LARGE_TUPLE_EXT: u8 = 105;
 pub const TAG_LIST_EXT: u8 = 108;
+pub const TAG_LOCAL_EXT: u8 = 121;
 
 pub const TAG_MAP_EXT: u8 = 116;
 

@@ -18,7 +18,7 @@ from types import ModuleType
 import pytest
 from fixture_manifest import (
     OTP_VECTOR_DIR,
-    REJECTED_FEATURE,
+    REJECTED_FEATURES,
     REJECTED_WRONGLY_BY,
     Vector,
     codec_id,
@@ -52,7 +52,7 @@ def test_decode_otp_vector(
     data = vector.path.read_bytes()
     step = decode_blocker(vector, cid)
 
-    if step is None and REJECTED_FEATURE in vector.features:
+    if step is None and REJECTED_FEATURES & vector.features:
         step = REJECTED_WRONGLY_BY.get(cid)
         if step is not None:
             request.applymarker(pytest.mark.xfail(strict=True, reason=step))
