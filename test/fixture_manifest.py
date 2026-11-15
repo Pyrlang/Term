@@ -33,9 +33,7 @@ DECODE_BLOCKED_BY: dict[tuple[str, str], str] = {}
 
 # Features that decode but do not come back as the same term after
 # decode -> encode (in addition to everything that does not decode).
-ROUNDTRIP_BLOCKED: dict[str, str] = {
-    "local_fun": "TERM-13",
-}
+ROUNDTRIP_BLOCKED: dict[str, str] = {}
 
 ROUNDTRIP_BLOCKED_BY: dict[tuple[str, str], str] = {}
 

@@ -431,30 +431,89 @@ def _decode_node(reader: _Reader) -> Atom:
     return _decode_plain_atom(reader, "Node name")
 
 
-# Largest arity of an export fun: OTP decodes any small integer, at most
-# 2^59 - 1 on a 64-bit emulator (MAX_SMALL).
-_MAX_EXPORT_ARITY = 2**59 - 1
+# Range of a small integer on a 64-bit OTP emulator (MIN_SMALL, MAX_SMALL):
+# what OTP accepts for the integer fields of EXPORT_EXT and NEW_FUN_EXT.
+_MIN_SMALL = -(2**59)
+_MAX_SMALL = 2**59 - 1
 
 
-def _decode_export_arity(reader: _Reader) -> int:
-    """The Arity of ``EXPORT_EXT``: a non-negative small integer, in any
-    integer encoding (OTP 29 accepts INTEGER_EXT and bignums too)."""
+def _decode_small_int(reader: _Reader, what: str) -> int:
+    """An integer field of another term (``what``) that OTP decodes as a
+    whole term and requires to be small: any integer encoding is accepted."""
     tag = reader.u8()
     if tag == TAG_SMALL_INT:
         return reader.u8()
     if tag == TAG_INT:
-        arity = reader.i32()
-    elif tag in (TAG_SMALL_BIG_EXT, TAG_LARGE_BIG_EXT):
+        return reader.i32()
+    if tag in (TAG_SMALL_BIG_EXT, TAG_LARGE_BIG_EXT):
         nbytes = reader.u8() if tag == TAG_SMALL_BIG_EXT else reader.u32()
         sign = reader.u8()
-        arity = int.from_bytes(reader.read(nbytes), "little")
+        value = int.from_bytes(reader.read(nbytes), "little")
         if sign:
-            arity = -arity
-    else:
-        raise PyCodecError("EXPORT_EXT arity must be an integer, found tag %d" % tag)
-    if not 0 <= arity <= _MAX_EXPORT_ARITY:
+            value = -value
+        if not _MIN_SMALL <= value <= _MAX_SMALL:
+            raise PyCodecError("%s is out of range" % what)
+        return value
+    raise PyCodecError("%s must be an integer, found tag %d" % (what, tag))
+
+
+def _decode_export_arity(reader: _Reader) -> int:
+    """The Arity of ``EXPORT_EXT``: a non-negative small integer (OTP 29
+    accepts INTEGER_EXT and bignums too)."""
+    arity: int = _decode_small_int(reader, "EXPORT_EXT arity")
+    if arity < 0:
         raise PyCodecError("EXPORT_EXT arity is out of range")
     return arity
+
+
+def _decode_pid(reader: _Reader, tag: int) -> Pid:
+    """The rest of a ``PID_EXT`` or ``NEW_PID_EXT`` whose tag was read. ID
+    and Serial are not limited for a remote node (OTP 29's dec_pid checks
+    them only for its own pids); the 8-bit Creation is."""
+    node = _decode_node(reader)
+    id1 = reader.u32()
+    serial = reader.u32()
+    if tag == TAG_PID_EXT:
+        creation = _tiny_creation(reader, "PID_EXT")
+    else:
+        creation = reader.u32()
+    return Pid(node_name=node, id=id1, serial=serial, creation=creation)
+
+
+# Most free variables of a fun (MAX_ARG in OTP).
+_MAX_FUN_FREE = 255
+
+
+def _start_fun(reader: _Reader) -> Any:
+    """``NEW_FUN_EXT`` after its tag: the header and the four fixed parts
+    are read here, as OTP checks them (Module an atom, OldIndex and OldUniq
+    small integers, a creator pid); the free variables follow as children."""
+    reader.u32()  # Size: OTP ignores it too (TERM-05)
+    arity = reader.u8()
+    uniq = reader.read(16)
+    index = reader.u32()
+    num_free = reader.u32()
+    if num_free > _MAX_FUN_FREE:
+        raise PyCodecError("NEW_FUN_EXT has %d free variables, at most 255" % num_free)
+    _count(reader, num_free, 1, "NEW_FUN_EXT")
+    module = _decode_plain_atom(reader, "NEW_FUN_EXT module")
+    old_index = _decode_small_int(reader, "NEW_FUN_EXT OldIndex")
+    old_uniq = _decode_small_int(reader, "NEW_FUN_EXT OldUniq")
+    tag = reader.u8()
+    if tag not in (TAG_PID_EXT, TAG_NEW_PID_EXT):
+        raise PyCodecError("NEW_FUN_EXT pid must be a pid, found tag %d" % tag)
+    pid = _decode_pid(reader, tag)
+    fun = Fun(
+        mod=module,
+        arity=arity,
+        pid=pid,
+        index=index,
+        uniq=uniq,
+        old_index=old_index,
+        old_uniq=old_uniq,
+        free=[],
+    )
+    return _Frame(_FUN, num_free, fun.free_, fun)
 
 
 def binary_to_term_2(data: bytes, options: OptionsType = None) -> tuple[Term, bytes]:
@@ -509,7 +568,7 @@ _LIST = 0  # LIST_EXT elements
 _LIST_TAIL = 1  # LIST_EXT tail that is not NIL
 _TUPLE = 2
 _MAP = 3  # keys and values in turn
-_FUN = 4  # NEW_FUN_EXT: Module, OldIndex, OldUniq, Pid, then free variables
+_FUN = 4  # NEW_FUN_EXT free variables
 
 # _Frame.key_ while a map waits for a key, not a value.
 _NO_KEY: Any = object()
@@ -524,13 +583,13 @@ class _Frame:
         kind: int,
         remaining: int,
         items: Any,
-        fun: Optional[tuple[int, bytes, int]] = None,
+        fun: Optional[Fun] = None,
     ) -> None:
         self.kind_ = kind
         self.remaining_ = remaining  # children still to come
         self.items_ = items  # list of children; a dict for a map
         self.key_: Any = _NO_KEY
-        self.fun_ = fun  # (arity, uniq, index) of a fun
+        self.fun_ = fun  # the fun whose free variables (items_) these are
 
     def open(self, reader: _Reader) -> tuple[Any, bool]:
         """Just started: itself if children follow, else ``(value, hooked)``."""
@@ -540,6 +599,8 @@ class _Frame:
             return self._list_end(reader)
         if self.kind_ == _TUPLE:
             return (), False
+        if self.kind_ == _FUN:
+            return self.fun_, False
         return self.items_, False  # an empty map
 
     def _list_end(self, reader: _Reader) -> tuple[Any, bool]:
@@ -583,20 +644,7 @@ class _Frame:
             return self._list_end(reader)
         if kind == _TUPLE:
             return tuple(self.items_), False
-        assert self.fun_ is not None  # kind == _FUN
-        arity, uniq, index = self.fun_
-        mod, old_index, old_uniq, pid = self.items_[:4]
-        fun = Fun(
-            mod=mod,
-            arity=arity,
-            pid=pid,
-            index=index,
-            uniq=uniq,
-            old_index=old_index,
-            old_uniq=old_uniq,
-            free=self.items_[4:],
-        )
-        return fun, False
+        return self.fun_, False  # kind == _FUN; items_ is its free_ list
 
 
 def _tiny_creation(reader: _Reader, what: str) -> int:
@@ -672,21 +720,8 @@ def _start_term(dec: _Decoder, reader: _Reader) -> Any:
     if tag == TAG_INT:
         return reader.i32()
 
-    if tag == TAG_PID_EXT:
-        # ID and Serial are not limited for a remote node (OTP 29's dec_pid
-        # checks them only for its own pids); Creation is.
-        node = _decode_node(reader)
-        id1 = reader.u32()
-        serial = reader.u32()
-        creation = _tiny_creation(reader, "PID_EXT")
-        return Pid(node_name=node, id=id1, serial=serial, creation=creation)
-
-    if tag == TAG_NEW_PID_EXT:
-        node = _decode_node(reader)
-        id1 = reader.u32()
-        serial = reader.u32()
-        creation = reader.u32()
-        return Pid(node_name=node, id=id1, serial=serial, creation=creation)
+    if tag in (TAG_PID_EXT, TAG_NEW_PID_EXT):
+        return _decode_pid(reader, tag)
 
     if tag in (TAG_PORT_EXT, TAG_NEW_PORT_EXT, TAG_V4_PORT_EXT):
         node = _decode_node(reader)
@@ -748,13 +783,7 @@ def _start_term(dec: _Decoder, reader: _Reader) -> Any:
         return Export(module, function, _decode_export_arity(reader))
 
     if tag == TAG_NEW_FUN_EXT:
-        reader.u32()  # Size: OTP ignores it too (TERM-05)
-        arity = reader.u8()
-        uniq = reader.read(16)
-        index = reader.u32()
-        num_free = _count(reader, reader.u32(), 1, "NEW_FUN_EXT")
-        # Module, OldIndex, OldUniq and Pid come before the free variables.
-        return _Frame(_FUN, 4 + num_free, [], (arity, uniq, index))
+        return _start_fun(reader)
 
     raise PyCodecError("Unknown tag %d" % tag)
 
@@ -809,7 +838,7 @@ _PID_FIELDS = struct.Struct(">III")
 
 def _pack_export(val: Export) -> bytes:
     """``EXPORT_EXT``: Module, Function, then Arity as OTP writes integers."""
-    if type(val.arity_) is not int or not 0 <= val.arity_ <= _MAX_EXPORT_ARITY:
+    if type(val.arity_) is not int or not 0 <= val.arity_ <= _MAX_SMALL:
         raise PyCodecError("EXPORT_EXT arity is out of range")
     return (
         bytes([TAG_EXPORT_EXT])
@@ -962,8 +991,11 @@ def _pack_binary(data: bytes, last_byte_bits: int) -> bytes:
 
 # A compound value whose children are being encoded (see _encode): the
 # container (kept alive, and its id marks it open), the children still to
-# come, and whether NIL_EXT follows them (a proper list).
-_EncFrame = tuple[object, Iterator[Any], bool]
+# come, and what to do after them: _END_NOTHING, _END_NIL (write NIL_EXT, a
+# proper list) or, if 0 or more, the offset of a NEW_FUN_EXT Size to fill in.
+_EncFrame = tuple[object, Iterator[Any], int]
+_END_NOTHING = -1
+_END_NIL = -2
 
 
 def _substitute(val: Any, encode_hook: EncodeHookType) -> Any:
@@ -1026,14 +1058,14 @@ def _start_value(
             return None
         out.append(TAG_LIST_EXT)
         out += util.to_u32(len(val))
-        return (val, iter(val), True)
+        return (val, iter(val), _END_NIL)
     elif type_val == tuple:
         if len(val) < 256:
             out += bytes([TAG_SMALL_TUPLE_EXT, len(val)])
         else:
             out.append(TAG_LARGE_TUPLE_EXT)
             out += util.to_u32(len(val))
-        return (val, iter(val), False) if val else None
+        return (val, iter(val), _END_NOTHING) if val else None
     elif type_val == dict:
         out.append(TAG_MAP_EXT)
         out += util.to_u32(len(val))
@@ -1042,7 +1074,7 @@ def _start_value(
         # A snapshot of the pairs: a hook that changes the dict while it is
         # encoded cannot break the iteration (as in the native codec).
         pairs = list(val.items())
-        return (val, (x for pair in pairs for x in pair), False)
+        return (val, (x for pair in pairs for x in pair), _END_NOTHING)
     elif val is None:
         out += _pack_atom("undefined")
     elif isinstance(val, Atom):
@@ -1053,13 +1085,15 @@ def _start_value(
             return _Substitute(val._tail)
         out.append(TAG_LIST_EXT)
         out += util.to_u32(len(val._elements))
-        return (val, itertools.chain(val._elements, (val._tail,)), False)
+        return (val, itertools.chain(val._elements, (val._tail,)), _END_NOTHING)
     elif isinstance(val, Pid):
         out += _pack_pid(val)
     elif isinstance(val, Port):
         out += _pack_port(val)
     elif isinstance(val, Export):
         out += _pack_export(val)
+    elif isinstance(val, Fun):
+        return _start_fun_value(val, out)
     elif isinstance(val, Reference):
         out += _pack_ref(val)
     elif type_val == bytes:
@@ -1069,6 +1103,49 @@ def _start_value(
     else:
         return _Substitute(_substitute(val, encode_hook))
     return None
+
+
+def _start_fun_value(val: Fun, out: bytearray) -> Optional[_EncFrame]:
+    """Write ``NEW_FUN_EXT`` up to its free variables, which follow as
+    children; ``Size`` is filled in once they are written."""
+    free = val.free_
+    if not isinstance(free, (list, tuple)) or len(free) > _MAX_FUN_FREE:
+        raise PyCodecError("Fun free variables must be a list of at most 255")
+    uniq = val.uniq_
+    if not isinstance(uniq, bytes) or len(uniq) != 16:
+        raise PyCodecError("Fun uniq must be 16 bytes")
+    if type(val.arity_) is not int or not 0 <= val.arity_ <= 255:
+        raise PyCodecError("Fun arity is out of range")
+    if type(val.index_) is not int or not 0 <= val.index_ < 2**32:
+        raise PyCodecError("Fun index is out of range")
+    for name, field in (("OldIndex", val.old_index_), ("OldUniq", val.old_uniq_)):
+        if type(field) is not int or not _MIN_SMALL <= field <= _MAX_SMALL:
+            raise PyCodecError("Fun %s is out of range" % name)
+    if not isinstance(val.module_, str):
+        raise PyCodecError("Fun module must be an atom")
+    if not isinstance(val.pid_, Pid):
+        raise PyCodecError("Fun pid must be a Pid")
+    size_at = len(out) + 1
+    out.append(TAG_NEW_FUN_EXT)
+    out += bytes(4)  # Size, filled in by _patch_fun_size
+    out.append(val.arity_)
+    out += uniq
+    out += _U32.pack(val.index_)
+    out += _U32.pack(len(free))
+    out += _pack_atom(val.module_)
+    out += _pack_int(val.old_index_)
+    out += _pack_int(val.old_uniq_)
+    out += _pack_pid(val.pid_)
+    if not free:
+        _patch_fun_size(out, size_at)
+        return None
+    return (val, iter(free), size_at)
+
+
+def _patch_fun_size(out: bytearray, size_at: int) -> None:
+    """Fill in the Size of a NEW_FUN_EXT that ends here: the bytes from the
+    Size field to the end of the fun."""
+    out[size_at : size_at + 4] = _U32.pack(len(out) - size_at)
 
 
 # Returned by next() when a frame has no children left.
@@ -1114,12 +1191,14 @@ def _encode(
             stack.append(frame)
         # The next child of the innermost open value; close finished ones.
         while stack:
-            container, children, nil = stack[-1]
+            container, children, end = stack[-1]
             val = next(children, _DONE)
             if val is not _DONE:
                 break
-            if nil:
+            if end == _END_NIL:
                 out.append(TAG_NIL_EXT)
+            elif end >= 0:
+                _patch_fun_size(out, end)
             stack.pop()
             open_ids.discard(id(container))
         else:

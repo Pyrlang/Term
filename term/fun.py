@@ -11,11 +11,14 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from typing import Any
+
 from term.atom import Atom
 from term.basetypes import BaseTerm, Term
 
-# Mixed into the hash so that an export never hashes like a tuple of its fields.
+# Mixed into the hashes so that a fun never hashes like a tuple of its fields.
 EXPORT_MARKER = "pyrlang.Export"
+FUN_MARKER = "pyrlang.Fun"
 
 
 class Export(BaseTerm):
@@ -64,8 +67,8 @@ class Fun(BaseTerm):
         pid: Term,
         index: int,
         uniq: bytes,
-        old_index: Term,
-        old_uniq: Term,
+        old_index: int,
+        old_uniq: int,
         free: list[Term],
     ) -> None:
         # Pid of the Erlang process which created the function
@@ -90,3 +93,39 @@ class Fun(BaseTerm):
 
         # A list of values: frozen captured variables
         self.free_ = free
+
+    def __repr__(self) -> str:
+        return "Fun(%r, arity=%d, index=%d, uniq=%s, free=%r)" % (
+            self.module_,
+            self.arity_,
+            self.index_,
+            self.uniq_.hex() if isinstance(self.uniq_, bytes) else self.uniq_,
+            self.free_,
+        )
+
+    def _key(self) -> tuple[Any, ...]:
+        # The creator pid is left out, as in Erlang: OTP 23+ drops it on
+        # decoding and funs that differ only in it are equal (=:=).
+        return (
+            self.module_,
+            self.arity_,
+            self.index_,
+            self.uniq_,
+            self.old_index_,
+            self.old_uniq_,
+        )
+
+    def __eq__(self, other: object) -> bool:
+        return (
+            isinstance(other, Fun)
+            and self._key() == other._key()
+            and list(self.free_) == list(other.free_)
+        )
+
+    def __ne__(self, other: object) -> bool:
+        return not self.__eq__(other)
+
+    def __hash__(self) -> int:
+        # Free variables may be unhashable (lists); equal funs still hash
+        # equally, as they agree on everything else.
+        return hash((FUN_MARKER,) + self._key())

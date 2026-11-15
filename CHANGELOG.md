@@ -75,3 +75,13 @@
   but must be a non-negative small integer, and module and function stay
   atoms whatever the atom options (`fun true:map/2` keeps `Atom('true')`).
   Error messages for a node name that is not an atom are unchanged.
+- Local funs (`Fun`) encode as `NEW_FUN_EXT` in both codecs, with the right
+  `Size`, so a fun from Erlang can be sent back and called there. Before,
+  the Python codec sent a `(b'Fun', {...})` tuple and the native codec the
+  same. Decoding ignores `Size` (as OTP does) and rejects what OTP rejects:
+  a module that is not an atom, `OldIndex`/`OldUniq` that are not small
+  integers, a creator that is not a pid, more than 255 free variables. Module,
+  `OldIndex`, `OldUniq` and the pid no longer pass through the decode hooks
+  or atom options; free variables are a `list` in both codecs (native gave a
+  `tuple`). `Fun` has equality (the creator pid does not count, as in
+  Erlang), hash and repr.

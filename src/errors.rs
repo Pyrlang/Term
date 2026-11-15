@@ -53,10 +53,15 @@ pub enum CodecError {
     // Encode hooks that keep returning values with no encoding of their own.
     #[error("Value is substituted more than max_depth {max_depth} times")]
     TooManySubstitutions { max_depth: usize },
-    // A fun frame finished without its four fixed parts (cannot happen:
-    // the frame always expects at least four children).
-    #[error("Fun is missing Module, OldIndex, OldUniq or Pid")]
-    BadFun,
+    // NEW_FUN_EXT with more free variables than MAX_ARG (255).
+    #[error("NEW_FUN_EXT has {count} free variables, at most 255")]
+    TooManyFree { count: usize },
+    // NEW_FUN_EXT whose creator pid is not a pid.
+    #[error("NEW_FUN_EXT pid must be a pid, found tag {b}")]
+    FunPidNotAPid { b: u8 },
+    // A Fun to encode with a field of the wrong type or out of range.
+    #[error("{0}")]
+    BadFunValue(&'static str),
     #[error("Read failed: {0}")]
     ReadError(#[from] ReadError),
     // A Python call failed (a user hook raised, a type check failed); the
@@ -72,11 +77,12 @@ pub enum CodecError {
     // whose module or function is not (OTP rejects them).
     #[error("{what} must be an atom, found tag {b}")]
     NotAnAtom { what: &'static str, b: u8 },
-    // EXPORT_EXT arity that is not a small non-negative integer.
-    #[error("EXPORT_EXT arity must be an integer, found tag {b}")]
-    ExportArityNotInt { b: u8 },
-    #[error("EXPORT_EXT arity is out of range")]
-    ExportArityRange,
+    // An integer field of EXPORT_EXT or NEW_FUN_EXT that is not an integer,
+    // or not a small one (OTP requires is_small).
+    #[error("{what} must be an integer, found tag {b}")]
+    NotAnInteger { what: &'static str, b: u8 },
+    #[error("{what} is out of range")]
+    IntegerRange { what: &'static str },
     // An 8-bit creation above 3 in an old node-container tag (OTP rejects it).
     #[error("{what} creation {creation} is above 3")]
     BadCreation { what: &'static str, creation: u8 },

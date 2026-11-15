@@ -353,7 +353,9 @@ def _node_containers() -> Iterator[BadVector]:
     words = b"".join(_u32(w) for w in (1, 2, 3, 4, 5, 6))
     yield BadVector("newer_ref_6_words", b"\x83Z\x00\x06" + node + _u32(1) + words)
     yield BadVector("new_ref_6_words", b"\x83r\x00\x06" + node + b"\x01" + words)
-    yield BadVector("new_ref_0_words", b"\x83r\x00\x00" + node + b"\x01")
+    # Not here: references with 0 words. OTP reads their first word from
+    # past the term, so whether it rejects them depends on those bytes
+    # (test_etf_decode.py: test_decode_ref_without_words).
     yield BadVector("ref_ext_word_2p18", b"\x83e" + node + _u32(1 << 18) + b"\x02")
     yield BadVector("ref_ext_creation_4", b"\x83e" + node + _u32(5) + b"\x04")
 
@@ -618,10 +620,6 @@ def _vector_blocks() -> tuple[dict[str, str], dict[tuple[str, str], str]]:
     # Atoms have at most 255 characters.
     both[b + "otp_5484.atom_65000"] = "TERM-15"
     both[b + "otp_5484.atom_256"] = "TERM-15"
-    # Fun fields of the wrong type; more free variables than MAX_ARG (255).
-    for n in ("bad_module", "bad_index", "bad_uniq"):
-        both[b + "otp_5484.new_fun_" + n] = "TERM-13"
-    both[b + "otp_5484.fake_fun_257_free"] = "TERM-13"
     return both, by
 
 

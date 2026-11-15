@@ -1,5 +1,6 @@
 """Decoding tests; each runs against the Python and the native codec."""
 
+import copy
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -319,10 +320,18 @@ def test_decode_old_node_container_tags(
     assert value == codec.binary_to_term(otp29, None)[0]
 
 
-def test_decode_newer_ref_without_words(codec: ModuleType) -> None:
-    """OTP 29 decodes this by reading the first ID word past the end of the
-    term; we refuse a reference with no ID words."""
-    data = bytes([131, 90, 0, 0]) + _A_B + (1).to_bytes(4)
+@pytest.mark.parametrize(
+    "data",
+    [
+        bytes([131, 90, 0, 0]) + _A_B + (1).to_bytes(4),
+        bytes([131, 114, 0, 0]) + _A_B + bytes([1]),
+    ],
+    ids=["NEWER_REFERENCE_EXT", "NEW_REFERENCE_EXT"],
+)
+def test_decode_ref_without_words(codec: ModuleType, data: bytes) -> None:
+    """OTP 29 reads the first ID word of these from past the end of the
+    term, so it accepts or rejects them depending on the bytes that happen
+    to follow; we refuse a reference with no ID words."""
     with pytest.raises(codec.PyCodecError, match="ID words"):
         codec.binary_to_term(data, None)
 
@@ -1660,6 +1669,61 @@ def test_decode_fun(codec: ModuleType) -> None:
     val, tail = codec.binary_to_term(data, None)
     assert isinstance(val, Fun)
     _assert_expected_tail(tail)
+
+
+@pytest.mark.parametrize("name", ["fun_local", "fun_closure"])
+def test_fun_reencodes_to_otp_bytes(codec: ModuleType, name: str) -> None:
+    """A local fun from OTP 29 encodes back to exactly OTP's bytes, Size
+    included; the closure's free variables come back as a list."""
+    data = (FIXTURE_DIR / (name + ".etf")).read_bytes()
+    value, tail = codec.binary_to_term(data, None)
+    assert tail == b""
+    assert isinstance(value, Fun)
+    assert type(value.free_) is list
+    assert value.module_ == Atom("gen_fixtures")
+    assert isinstance(value.pid_, Pid)
+    assert codec.term_to_binary(value, None) == data
+    if name == "fun_closure":
+        assert value.free_ == [1, Atom("two")]
+
+
+@pytest.mark.parametrize("size", [0, 0xFFFFFFFF])
+def test_fun_size_is_ignored(codec: ModuleType, size: int) -> None:
+    """OTP 29 decodes a NEW_FUN_EXT whatever its Size says (OTP-18104); so
+    do we, and the re-encoded fun has the right Size."""
+    data = (FIXTURE_DIR / "fun_closure.etf").read_bytes()
+    wrong = data[:2] + size.to_bytes(4) + data[6:]
+    value, _tail = codec.binary_to_term(wrong, None)
+    assert value == codec.binary_to_term(data, None)[0]
+    assert codec.term_to_binary(value, None) == data
+
+
+def test_fun_equality() -> None:
+    data = (FIXTURE_DIR / "fun_closure.etf").read_bytes()
+    a = py_impl.binary_to_term(data, None)[0]
+    b = py_impl.binary_to_term(data, None)[0]
+    assert isinstance(a, Fun) and isinstance(b, Fun)
+    assert a == b and hash(a) == hash(b)
+    b.pid_ = Pid(Atom("other@host"), 1, 2, 3)
+    assert a == b  # the creator pid does not count, as in Erlang
+    b.free_ = [2, Atom("two")]
+    assert a != b
+    assert "gen_fixtures" in repr(a)
+
+
+def test_encode_fun_bad_fields(codec: ModuleType) -> None:
+    good = codec.binary_to_term((FIXTURE_DIR / "fun_local.etf").read_bytes(), None)[0]
+    for field, bad in [
+        ("uniq_", b"short"),
+        ("arity_", 256),
+        ("old_index_", 2**59),
+        ("pid_", None),
+        ("free_", [0] * 256),
+    ]:
+        fun = copy.copy(good)
+        setattr(fun, field, bad)
+        with pytest.raises(codec.PyCodecError):
+            codec.term_to_binary(fun, None)
 
 
 def test_decode_compressed(codec: ModuleType) -> None:

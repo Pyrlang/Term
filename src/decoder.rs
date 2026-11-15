@@ -84,14 +84,23 @@ enum Frame<'py> {
         key: Option<Bound<'py, PyAny>>,
         remaining: usize,
     },
-    /// NEW_FUN_EXT: Module, OldIndex, OldUniq, Pid, then the free variables.
+    /// NEW_FUN_EXT free variables; the parts before them are in `head`.
     Fun {
-        arity: u8,
-        uniq: Bound<'py, PyBytes>,
-        index: u32,
+        head: FunHead<'py>,
         items: Vec<Bound<'py, PyAny>>,
         remaining: usize,
     },
+}
+
+/// The parts of a NEW_FUN_EXT that come before its free variables.
+struct FunHead<'py> {
+    arity: u8,
+    uniq: Bound<'py, PyBytes>,
+    index: u32,
+    module: Bound<'py, PyAny>,
+    old_index: i64,
+    old_uniq: i64,
+    pid: Bound<'py, PyAny>,
 }
 
 /// What reading the start of a term gives.
@@ -398,22 +407,7 @@ impl<'py> Decoder<'py> {
             consts::TAG_NEW_REF_EXT => self.parse_ref(reader),
             consts::TAG_NEWER_REF_EXT => self.parse_newer_ref(reader),
             consts::TAG_EXPORT_EXT => self.parse_export(reader),
-            consts::TAG_NEW_FUN_EXT => {
-                let _size = reader.read_u32()?; // OTP ignores it too (TERM-05)
-                let arity = reader.read_u8()?;
-                let uniq = PyBytes::new(self.py, reader.read(16)?);
-                let index = reader.read_u32()?;
-                let num_free = read_count(reader, false, 1, "NEW_FUN_EXT")?;
-                // Module, OldIndex, OldUniq and Pid come before the free variables.
-                let remaining = num_free.saturating_add(4);
-                return Ok(Start::Open(Frame::Fun {
-                    arity,
-                    uniq,
-                    index,
-                    items: items_for(remaining),
-                    remaining,
-                }));
-            }
+            consts::TAG_NEW_FUN_EXT => return self.start_fun(reader),
             _ => Err(CodecError::UnknownTermTagByte { b: tag }),
         }?;
         Ok(Start::Value(value))
@@ -436,6 +430,11 @@ impl<'py> Decoder<'py> {
             Frame::Map {
                 dict, remaining: 0, ..
             } => Ok(Progress::Done(dict.into_any(), false)),
+            Frame::Fun {
+                head,
+                items,
+                remaining: 0,
+            } => Ok(Progress::Done(self.make_fun(head, items)?, false)),
             frame => Ok(Progress::Waiting(frame)),
         }
     }
@@ -538,24 +537,17 @@ impl<'py> Decoder<'py> {
                 }))
             }
             Frame::Fun {
-                arity,
-                uniq,
-                index,
+                head,
                 mut items,
                 remaining,
             } => {
                 items.push(value);
                 let remaining = remaining.saturating_sub(1);
                 if remaining == 0 {
-                    return Ok(Progress::Done(
-                        self.make_fun(arity, uniq, index, items)?,
-                        false,
-                    ));
+                    return Ok(Progress::Done(self.make_fun(head, items)?, false));
                 }
                 Ok(Progress::Waiting(Frame::Fun {
-                    arity,
-                    uniq,
-                    index,
+                    head,
                     items,
                     remaining,
                 }))
@@ -563,26 +555,65 @@ impl<'py> Decoder<'py> {
         }
     }
 
-    /// Build a `term.fun.Fun` from its header fields and its decoded parts:
-    /// Module, OldIndex, OldUniq, Pid, then the free variables.
+    /// NEW_FUN_EXT after its tag: the header and the four fixed parts are
+    /// read here, as OTP checks them (Module an atom, OldIndex and OldUniq
+    /// small integers, a creator pid); the free variables follow as children.
+    fn start_fun(&mut self, reader: &mut Reader) -> CodecResult<Start<'py>> {
+        let _size = reader.read_u32()?; // OTP ignores it too (TERM-05)
+        let arity = reader.read_u8()?;
+        let uniq = PyBytes::new(self.py, reader.read(16)?);
+        let index = reader.read_u32()?;
+        let num_free = reader.read_u32()? as usize;
+        if num_free > MAX_FUN_FREE {
+            return Err(CodecError::TooManyFree { count: num_free });
+        }
+        if num_free > reader.remaining() {
+            return Err(CodecError::TooManyElements {
+                what: "NEW_FUN_EXT",
+                count: num_free,
+                remaining: reader.remaining(),
+            });
+        }
+        let module = self.decode_plain_atom(reader, "NEW_FUN_EXT module")?;
+        let old_index = read_small_int(reader, "NEW_FUN_EXT OldIndex")?;
+        let old_uniq = read_small_int(reader, "NEW_FUN_EXT OldUniq")?;
+        let pid = match reader.read_u8()? {
+            consts::TAG_PID_EXT => self.parse_pid(reader)?,
+            consts::TAG_NEW_PID_EXT => self.parse_new_pid(reader)?,
+            b => return Err(CodecError::FunPidNotAPid { b }),
+        };
+        Ok(Start::Open(Frame::Fun {
+            head: FunHead {
+                arity,
+                uniq,
+                index,
+                module,
+                old_index,
+                old_uniq,
+                pid,
+            },
+            items: items_for(num_free),
+            remaining: num_free,
+        }))
+    }
+
+    /// Build a `term.fun.Fun` from its head and its free variables (a list).
     fn make_fun(
         &mut self,
-        arity: u8,
-        uniq: Bound<'py, PyBytes>,
-        index: u32,
-        items: Vec<Bound<'py, PyAny>>,
+        head: FunHead<'py>,
+        free: Vec<Bound<'py, PyAny>>,
     ) -> CodecResult<Bound<'py, PyAny>> {
-        let mut parts = items.into_iter();
-        // Tuple fields are evaluated left to right.
-        let (Some(module), Some(old_index), Some(old_uniq), Some(pid)) =
-            (parts.next(), parts.next(), parts.next(), parts.next())
-        else {
-            return Err(CodecError::BadFun);
-        };
-        let free_vars = PyTuple::new(self.py, parts)?;
+        let free_vars = PyList::new(self.py, free)?;
         let fun_cls = cached_class(self.py, &mut self.cached_fun_pyclass, "term.fun", "Fun")?;
         Ok(fun_cls.call1((
-            module, arity, pid, index, uniq, old_index, old_uniq, free_vars,
+            head.module,
+            head.arity,
+            head.pid,
+            head.index,
+            head.uniq,
+            head.old_index,
+            head.old_uniq,
+            free_vars,
         ))?)
     }
 
@@ -871,19 +902,21 @@ fn read_tiny_creation(reader: &mut Reader, what: &'static str) -> CodecResult<u8
     Ok(creation)
 }
 
-/// Largest arity of an export fun: OTP decodes any small integer, at most
-/// 2^59 - 1 on a 64-bit emulator (MAX_SMALL).
-pub const MAX_EXPORT_ARITY: u64 = (1 << 59) - 1;
+/// Range of a small integer on a 64-bit OTP emulator (MIN_SMALL, MAX_SMALL):
+/// what OTP accepts for the integer fields of EXPORT_EXT and NEW_FUN_EXT.
+pub const MIN_SMALL: i64 = -(1 << 59);
+pub const MAX_SMALL: i64 = (1 << 59) - 1;
 
-/// Read the Arity of EXPORT_EXT: a non-negative small integer, in any
-/// integer encoding (OTP 29 accepts INTEGER_EXT and bignums too).
-fn read_export_arity(reader: &mut Reader) -> CodecResult<u64> {
+/// Most free variables of a fun (MAX_ARG in OTP).
+pub const MAX_FUN_FREE: usize = 255;
+
+/// Read an integer field of another term (`what`) that OTP decodes as a
+/// whole term and requires to be small: any integer encoding is accepted.
+fn read_small_int(reader: &mut Reader, what: &'static str) -> CodecResult<i64> {
     let tag = reader.read_u8()?;
-    let arity: u64 = match tag {
-        consts::TAG_SMALL_UINT => u64::from(reader.read_u8()?),
-        consts::TAG_INT => {
-            u64::try_from(reader.read_i32()?).map_err(|_| CodecError::ExportArityRange)?
-        }
+    match tag {
+        consts::TAG_SMALL_UINT => Ok(i64::from(reader.read_u8()?)),
+        consts::TAG_INT => Ok(i64::from(reader.read_i32()?)),
         consts::TAG_SMALL_BIG_EXT | consts::TAG_LARGE_BIG_EXT => {
             let size = if tag == consts::TAG_SMALL_BIG_EXT {
                 usize::from(reader.read_u8()?)
@@ -891,29 +924,37 @@ fn read_export_arity(reader: &mut Reader) -> CodecResult<u64> {
                 reader.read_u32()? as usize
             };
             let negative = reader.read_u8()? != 0;
-            let magnitude = small_magnitude(reader.read(size)?)?;
-            if negative && magnitude != 0 {
-                return Err(CodecError::ExportArityRange);
+            let magnitude = small_magnitude(reader.read(size)?, what)?;
+            let value = if negative {
+                -i128::from(magnitude)
+            } else {
+                i128::from(magnitude)
+            };
+            if value < i128::from(MIN_SMALL) || value > i128::from(MAX_SMALL) {
+                return Err(CodecError::IntegerRange { what });
             }
-            magnitude
+            i64::try_from(value).map_err(|_| CodecError::IntegerRange { what })
         }
-        _ => return Err(CodecError::ExportArityNotInt { b: tag }),
-    };
-    if arity > MAX_EXPORT_ARITY {
-        return Err(CodecError::ExportArityRange);
+        _ => Err(CodecError::NotAnInteger { what, b: tag }),
     }
-    Ok(arity)
+}
+
+/// Read the Arity of EXPORT_EXT: a non-negative small integer (OTP 29
+/// accepts INTEGER_EXT and bignums too).
+fn read_export_arity(reader: &mut Reader) -> CodecResult<u64> {
+    let what = "EXPORT_EXT arity";
+    u64::try_from(read_small_int(reader, what)?).map_err(|_| CodecError::IntegerRange { what })
 }
 
 /// The value of little-endian bignum digits, if it fits 64 bits.
-fn small_magnitude(digits: &[u8]) -> CodecResult<u64> {
+fn small_magnitude(digits: &[u8], what: &'static str) -> CodecResult<u64> {
     let mut value = 0u64;
     for (i, &d) in digits.iter().enumerate() {
         if d == 0 {
             continue;
         }
         if i >= 8 {
-            return Err(CodecError::ExportArityRange);
+            return Err(CodecError::IntegerRange { what });
         }
         value |= u64::from(d) << (8 * i);
     }
@@ -968,8 +1009,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        first_ref_word, inflate, read_export_arity, read_ref_words, read_tiny_creation,
-        MAX_EXPORT_ARITY,
+        first_ref_word, inflate, read_export_arity, read_ref_words, read_tiny_creation, MAX_SMALL,
     };
 
     #[test]
@@ -982,10 +1022,10 @@ mod tests {
         assert_eq!(arity(&[110, 9, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0]).unwrap(), 2);
         assert_eq!(arity(&[110, 1, 1, 0]).unwrap(), 0);
         assert!(arity(&[110, 1, 1, 2]).is_err());
-        let max = MAX_EXPORT_ARITY.to_le_bytes();
+        let max = MAX_SMALL.to_le_bytes();
         let mut big = vec![110, 8, 0];
         big.extend(max);
-        assert_eq!(arity(&big).unwrap(), MAX_EXPORT_ARITY);
+        assert_eq!(arity(&big).unwrap(), MAX_SMALL as u64);
         big[10] += 1; // 2^59 - 1 + 2^56
         assert!(arity(&big).is_err());
         assert!(arity(&[106]).is_err());

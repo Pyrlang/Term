@@ -49,6 +49,8 @@ enum After<'py> {
     Nil,
     /// The tail of an improper list, encoded as one more child.
     Tail(Bound<'py, PyAny>),
+    /// Fill in the Size of the NEW_FUN_EXT whose Size field is at this offset.
+    FunSize(usize),
 }
 
 /// A compound value whose children are being encoded. `container` keeps the
@@ -82,8 +84,23 @@ impl<'py> Frame<'py> {
                 Ok(None)
             }
             After::Tail(tail) => Ok(Some(tail)),
+            After::FunSize(at) => {
+                patch_fun_size(data, at)?;
+                Ok(None)
+            }
         }
     }
+}
+
+/// Fill in the Size of a NEW_FUN_EXT that ends here: the bytes from the Size
+/// field (at offset `at`) to the end of the fun.
+fn patch_fun_size(data: &mut [u8], at: usize) -> CodecResult<()> {
+    let size = length_u32(data.len().saturating_sub(at))?;
+    let field = data
+        .get_mut(at..at.saturating_add(4))
+        .ok_or(CodecError::BadFunValue("Size field is missing"))?;
+    field.copy_from_slice(&size.to_be_bytes());
+    Ok(())
 }
 
 /// What starting to encode a value gives.
@@ -94,6 +111,16 @@ enum Step<'py> {
     Open(Frame<'py>),
     /// Encode this value in its place.
     Substitute(Bound<'py, PyAny>),
+}
+
+/// An exact `int` (not `bool`) from `min` to MAX_SMALL, or `IntegerRange`.
+fn small_int(value: &Bound<'_, PyAny>, min: i64, what: &'static str) -> CodecResult<i64> {
+    match value.extract::<i64>() {
+        Ok(v) if value.is_exact_instance_of::<PyInt>() && v >= min && v <= decoder::MAX_SMALL => {
+            Ok(v)
+        }
+        _ => Err(CodecError::IntegerRange { what }),
+    }
 }
 
 /// A 32-bit length or count field, or `TooLong`.
@@ -272,6 +299,7 @@ impl<'py> Encoder<'py> {
             "Pid" => self.write_pid(term)?,
             "Port" => self.write_port(term)?,
             "Export" => self.write_export(term)?,
+            "Fun" => return self.start_fun(term),
             "Reference" => self.write_ref(term)?,
             "bytes" => {
                 let py_bytes = term.cast::<PyBytes>()?;
@@ -471,18 +499,76 @@ impl<'py> Encoder<'py> {
     fn write_export(&mut self, py_export: &Bound<'py, PyAny>) -> CodecResult<()> {
         let module = py_export.getattr("module_")?;
         let function = py_export.getattr("function_")?;
-        let py_arity = py_export.getattr("arity_")?;
-        let arity = match py_arity.extract::<u64>() {
-            Ok(a) if a <= decoder::MAX_EXPORT_ARITY && py_arity.is_exact_instance_of::<PyInt>() => {
-                a
-            }
-            _ => return Err(CodecError::ExportArityRange),
-        };
+        let arity = small_int(&py_export.getattr("arity_")?, 0, "EXPORT_EXT arity")?;
         self.data.push(consts::TAG_EXPORT_EXT);
         self.write_atom_from_cow(module.cast::<PyString>()?.to_cow()?)?;
         self.write_atom_from_cow(function.cast::<PyString>()?.to_cow()?)?;
-        self.write_i64(i64::try_from(arity).map_err(|_| CodecError::ExportArityRange)?);
+        self.write_i64(arity);
         Ok(())
+    }
+
+    /// Start a Fun: NEW_FUN_EXT up to its free variables, which follow as
+    /// children; Size is filled in once they are written.
+    fn start_fun(&mut self, fun: &Bound<'py, PyAny>) -> CodecResult<Step<'py>> {
+        let free = fun.getattr("free_")?;
+        let (children, count) = if let Ok(list) = free.cast::<PyList>() {
+            (Children::List(list.clone()), list.len())
+        } else if let Ok(tuple) = free.cast::<PyTuple>() {
+            (Children::Tuple(tuple.clone()), tuple.len())
+        } else {
+            return Err(CodecError::BadFunValue(
+                "Fun free variables must be a list of at most 255",
+            ));
+        };
+        if count > decoder::MAX_FUN_FREE {
+            return Err(CodecError::BadFunValue(
+                "Fun free variables must be a list of at most 255",
+            ));
+        }
+        let py_uniq = fun.getattr("uniq_")?;
+        let uniq = match py_uniq.cast::<PyBytes>() {
+            Ok(b) if b.as_bytes().len() == 16 => b.as_bytes(),
+            _ => return Err(CodecError::BadFunValue("Fun uniq must be 16 bytes")),
+        };
+        let arity = u8::try_from(small_int(&fun.getattr("arity_")?, 0, "Fun arity")?)
+            .map_err(|_| CodecError::IntegerRange { what: "Fun arity" })?;
+        let index = u32::try_from(small_int(&fun.getattr("index_")?, 0, "Fun index")?)
+            .map_err(|_| CodecError::IntegerRange { what: "Fun index" })?;
+        let old_index = small_int(
+            &fun.getattr("old_index_")?,
+            decoder::MIN_SMALL,
+            "Fun OldIndex",
+        )?;
+        let old_uniq = small_int(
+            &fun.getattr("old_uniq_")?,
+            decoder::MIN_SMALL,
+            "Fun OldUniq",
+        )?;
+        let module = fun.getattr("module_")?;
+        let Ok(module) = module.cast::<PyString>() else {
+            return Err(CodecError::BadFunValue("Fun module must be an atom"));
+        };
+        let pid = fun.getattr("pid_")?;
+        if pid.get_type().name()?.to_cow()? != "Pid" {
+            return Err(CodecError::BadFunValue("Fun pid must be a Pid"));
+        }
+
+        self.data.push(consts::TAG_NEW_FUN_EXT);
+        let size_at = self.data.len();
+        self.data.push_u32(0); // Size, filled in by patch_fun_size
+        self.data.push(arity);
+        self.data.extend_from_slice(uniq);
+        self.data.push_u32(index);
+        self.data.push_u32(length_u32(count)?);
+        self.write_atom_from_cow(module.to_cow()?)?;
+        self.write_i64(old_index);
+        self.write_i64(old_uniq);
+        self.write_pid(&pid)?;
+        if count == 0 {
+            patch_fun_size(&mut self.data, size_at)?;
+            return Ok(Step::Done);
+        }
+        Ok(self.open(fun, children, count, After::FunSize(size_at)))
     }
 
     /// Encode a Port: always V4_PORT_EXT, as OTP 26+ writes every port.
