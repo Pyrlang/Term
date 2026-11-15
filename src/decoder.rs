@@ -59,6 +59,7 @@ pub struct Decoder<'py> {
     cached_port_pyclass: Option<Bound<'py, PyAny>>,
     cached_ref_pyclass: Option<Bound<'py, PyAny>>,
     cached_fun_pyclass: Option<Bound<'py, PyAny>>,
+    cached_export_pyclass: Option<Bound<'py, PyAny>>,
     cached_improper_list_pyclass: Option<Bound<'py, PyAny>>,
     cached_bitstring_pyclass: Option<Bound<'py, PyAny>>,
 }
@@ -237,6 +238,7 @@ impl<'py> Decoder<'py> {
             cached_port_pyclass: None,
             cached_ref_pyclass: None,
             cached_fun_pyclass: None,
+            cached_export_pyclass: None,
             cached_improper_list_pyclass: None,
             cached_bitstring_pyclass: None,
         })
@@ -395,6 +397,7 @@ impl<'py> Decoder<'py> {
             consts::TAG_REFERENCE_EXT => self.parse_old_ref(reader),
             consts::TAG_NEW_REF_EXT => self.parse_ref(reader),
             consts::TAG_NEWER_REF_EXT => self.parse_newer_ref(reader),
+            consts::TAG_EXPORT_EXT => self.parse_export(reader),
             consts::TAG_NEW_FUN_EXT => {
                 let _size = reader.read_u32()?; // OTP ignores it too (TERM-05)
                 let arity = reader.read_u8()?;
@@ -720,16 +723,26 @@ impl<'py> Decoder<'py> {
         Ok(result)
     }
 
-    /// Decode the node name of a pid or reference: always a `term.atom.Atom`,
-    /// whatever the options and hooks say. Anything but an atom is an error.
+    /// Decode the node name of a pid, port or reference.
     fn decode_node_name(&mut self, reader: &mut Reader) -> CodecResult<Bound<'py, PyAny>> {
+        self.decode_plain_atom(reader, "Node name")
+    }
+
+    /// Decode an atom that is part of another term (`what`): always a
+    /// `term.atom.Atom`, `true` and `false` too, whatever the options and
+    /// hooks say. Anything but an atom is an error.
+    fn decode_plain_atom(
+        &mut self,
+        reader: &mut Reader,
+        what: &'static str,
+    ) -> CodecResult<Bound<'py, PyAny>> {
         let tag = reader.read_u8()?;
         let txt = match tag {
             consts::TAG_ATOM_EXT => read_latin1_text::<u16>(reader)?,
             consts::TAG_ATOM_UTF8_EXT => read_utf8_text::<u16>(reader)?,
             consts::TAG_SMALL_ATOM_EXT => read_latin1_text::<u8>(reader)?,
             consts::TAG_SMALL_ATOM_UTF8_EXT => read_utf8_text::<u8>(reader)?,
-            _ => return Err(CodecError::NodeNotAnAtom { b: tag }),
+            _ => return Err(CodecError::NotAnAtom { what, b: tag }),
         };
         let atom_cls = cached_class(
             self.py,
@@ -766,6 +779,20 @@ impl<'py> Decoder<'py> {
 
         let pid_cls = cached_class(self.py, &mut self.cached_pid_pyclass, "term.pid", "Pid")?;
         Ok(pid_cls.call1((node, id, serial, creation))?)
+    }
+
+    /// Given input _after_ the EXPORT_EXT tag byte: Module, Function, Arity.
+    fn parse_export(&mut self, reader: &mut Reader) -> CodecResult<Bound<'py, PyAny>> {
+        let module = self.decode_plain_atom(reader, "EXPORT_EXT module")?;
+        let function = self.decode_plain_atom(reader, "EXPORT_EXT function")?;
+        let arity = read_export_arity(reader)?;
+        let cls = cached_class(
+            self.py,
+            &mut self.cached_export_pyclass,
+            "term.fun",
+            "Export",
+        )?;
+        Ok(cls.call1((module, function, arity))?)
     }
 
     /// Given input _after_ a port tag byte (PORT_EXT, NEW_PORT_EXT or
@@ -844,6 +871,55 @@ fn read_tiny_creation(reader: &mut Reader, what: &'static str) -> CodecResult<u8
     Ok(creation)
 }
 
+/// Largest arity of an export fun: OTP decodes any small integer, at most
+/// 2^59 - 1 on a 64-bit emulator (MAX_SMALL).
+pub const MAX_EXPORT_ARITY: u64 = (1 << 59) - 1;
+
+/// Read the Arity of EXPORT_EXT: a non-negative small integer, in any
+/// integer encoding (OTP 29 accepts INTEGER_EXT and bignums too).
+fn read_export_arity(reader: &mut Reader) -> CodecResult<u64> {
+    let tag = reader.read_u8()?;
+    let arity: u64 = match tag {
+        consts::TAG_SMALL_UINT => u64::from(reader.read_u8()?),
+        consts::TAG_INT => {
+            u64::try_from(reader.read_i32()?).map_err(|_| CodecError::ExportArityRange)?
+        }
+        consts::TAG_SMALL_BIG_EXT | consts::TAG_LARGE_BIG_EXT => {
+            let size = if tag == consts::TAG_SMALL_BIG_EXT {
+                usize::from(reader.read_u8()?)
+            } else {
+                reader.read_u32()? as usize
+            };
+            let negative = reader.read_u8()? != 0;
+            let magnitude = small_magnitude(reader.read(size)?)?;
+            if negative && magnitude != 0 {
+                return Err(CodecError::ExportArityRange);
+            }
+            magnitude
+        }
+        _ => return Err(CodecError::ExportArityNotInt { b: tag }),
+    };
+    if arity > MAX_EXPORT_ARITY {
+        return Err(CodecError::ExportArityRange);
+    }
+    Ok(arity)
+}
+
+/// The value of little-endian bignum digits, if it fits 64 bits.
+fn small_magnitude(digits: &[u8]) -> CodecResult<u64> {
+    let mut value = 0u64;
+    for (i, &d) in digits.iter().enumerate() {
+        if d == 0 {
+            continue;
+        }
+        if i >= 8 {
+            return Err(CodecError::ExportArityRange);
+        }
+        value |= u64::from(d) << (8 * i);
+    }
+    Ok(value)
+}
+
 /// Read the ID word count of a reference: 1 to 5 (`ERTS_MAX_REF_NUMBERS`).
 /// OTP 29 also decodes a NEWER_REFERENCE_EXT with no words, but only by
 /// reading its first word from beyond the term; we reject it.
@@ -891,7 +967,29 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{first_ref_word, inflate, read_ref_words, read_tiny_creation};
+    use super::{
+        first_ref_word, inflate, read_export_arity, read_ref_words, read_tiny_creation,
+        MAX_EXPORT_ARITY,
+    };
+
+    #[test]
+    fn export_arity_encodings() {
+        let arity = |b: &[u8]| read_export_arity(&mut Reader::from(b));
+        assert_eq!(arity(&[97, 2]).unwrap(), 2);
+        assert_eq!(arity(&[98, 0, 0, 1, 0]).unwrap(), 256);
+        assert!(arity(&[98, 255, 255, 255, 255]).is_err());
+        // A bignum with high zero digits is still small; -0 is 0.
+        assert_eq!(arity(&[110, 9, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0]).unwrap(), 2);
+        assert_eq!(arity(&[110, 1, 1, 0]).unwrap(), 0);
+        assert!(arity(&[110, 1, 1, 2]).is_err());
+        let max = MAX_EXPORT_ARITY.to_le_bytes();
+        let mut big = vec![110, 8, 0];
+        big.extend(max);
+        assert_eq!(arity(&big).unwrap(), MAX_EXPORT_ARITY);
+        big[10] += 1; // 2^59 - 1 + 2^56
+        assert!(arity(&big).is_err());
+        assert!(arity(&[106]).is_err());
+    }
     use crate::errors::CodecError;
     use crate::reader::Reader;
 

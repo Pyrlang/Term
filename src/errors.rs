@@ -68,9 +68,15 @@ pub enum CodecError {
     UnhashableKey { type_name: String, error: PyErr },
     #[error("Unrecognized term tag byte: {}", b)]
     UnknownTermTagByte { b: u8 },
-    // A pid, port or reference whose node is not an atom (OTP rejects it).
-    #[error("Node name must be an atom, found tag {}", b)]
-    NodeNotAnAtom { b: u8 },
+    // A pid, port or reference whose node is not an atom, or an export fun
+    // whose module or function is not (OTP rejects them).
+    #[error("{what} must be an atom, found tag {b}")]
+    NotAnAtom { what: &'static str, b: u8 },
+    // EXPORT_EXT arity that is not a small non-negative integer.
+    #[error("EXPORT_EXT arity must be an integer, found tag {b}")]
+    ExportArityNotInt { b: u8 },
+    #[error("EXPORT_EXT arity is out of range")]
+    ExportArityRange,
     // An 8-bit creation above 3 in an old node-container tag (OTP rejects it).
     #[error("{what} creation {creation} is above 3")]
     BadCreation { what: &'static str, creation: u8 },

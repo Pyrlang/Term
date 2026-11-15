@@ -69,3 +69,9 @@
 - `Reference.create` numbers references with a per-process counter plus 32
   random bits, so two created references are never equal (it used a clock
   value plus a random number).
+- New `term.Export(module, function, arity)` for `fun M:F/A`. Both codecs
+  decode `EXPORT_EXT` and encode `Export` as OTP does; it used to raise
+  `Unknown tag`. As in OTP 29, the arity may arrive in any integer encoding
+  but must be a non-negative small integer, and module and function stay
+  atoms whatever the atom options (`fun true:map/2` keeps `Atom('true')`).
+  Error messages for a node name that is not an atom are unchanged.

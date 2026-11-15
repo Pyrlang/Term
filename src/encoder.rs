@@ -19,7 +19,7 @@ use super::decoder;
 use super::errors::{CodecError, CodecResult};
 use super::helpers;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyList, PyString, PyTuple};
+use pyo3::types::{PyBytes, PyDict, PyInt, PyList, PyString, PyTuple};
 use std::borrow::Cow;
 use std::collections::HashSet;
 
@@ -271,6 +271,7 @@ impl<'py> Encoder<'py> {
             }
             "Pid" => self.write_pid(term)?,
             "Port" => self.write_port(term)?,
+            "Export" => self.write_export(term)?,
             "Reference" => self.write_ref(term)?,
             "bytes" => {
                 let py_bytes = term.cast::<PyBytes>()?;
@@ -462,6 +463,25 @@ impl<'py> Encoder<'py> {
         self.data.push_u32(serial);
         self.data.push_u32(creation);
 
+        Ok(())
+    }
+
+    /// Encode an Export (`fun M:F/A`): EXPORT_EXT with Module, Function, then
+    /// Arity as OTP writes integers.
+    fn write_export(&mut self, py_export: &Bound<'py, PyAny>) -> CodecResult<()> {
+        let module = py_export.getattr("module_")?;
+        let function = py_export.getattr("function_")?;
+        let py_arity = py_export.getattr("arity_")?;
+        let arity = match py_arity.extract::<u64>() {
+            Ok(a) if a <= decoder::MAX_EXPORT_ARITY && py_arity.is_exact_instance_of::<PyInt>() => {
+                a
+            }
+            _ => return Err(CodecError::ExportArityRange),
+        };
+        self.data.push(consts::TAG_EXPORT_EXT);
+        self.write_atom_from_cow(module.cast::<PyString>()?.to_cow()?)?;
+        self.write_atom_from_cow(function.cast::<PyString>()?.to_cow()?)?;
+        self.write_i64(i64::try_from(arity).map_err(|_| CodecError::ExportArityRange)?);
         Ok(())
     }
 

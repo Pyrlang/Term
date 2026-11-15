@@ -20,6 +20,7 @@ import pytest
 from term import py_codec_impl
 from term.atom import Atom
 from term.bitstring import BitString
+from term.fun import Export
 from term.list import ImproperList
 from term.pid import Pid
 from term.port import Port
@@ -60,7 +61,6 @@ FIXTURES = _load_manifest()
 # Fixtures that neither codec decodes yet, and the plan step that fixes them.
 NOT_DECODED: dict[str, str] = {
     "float_1_5_minor_0": "TERM-14",
-    "fun_export": "TERM-12",
     "record_exported": "TERM-17",
     "record_local": "TERM-17",
 }
@@ -146,6 +146,7 @@ EXPECTED: dict[str, Any] = {
     "port_2p28_minus_1": Port(_FIX_NODE, 2**28 - 1, 1),
     "port_2p28": Port(_FIX_NODE, 2**28, 1),
     "port_2p64_minus_1": Port(_FIX_NODE, 2**64 - 1, 0xFFFFFFFF),
+    "fun_export": Export(Atom("lists"), Atom("map"), 2),
     "ref_1_word": Reference(_FIX_NODE, 1, struct.pack(">I", 1)),
     "ref_3_words": Reference(_FIX_NODE, 1, struct.pack(">3I", 1, 2, 3)),
     "ref_5_words": Reference(_FIX_NODE, 1, struct.pack(">5I", 1, 2, 3, 4, 5)),

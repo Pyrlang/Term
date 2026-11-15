@@ -10,7 +10,7 @@ import pytest
 from term import py_codec_impl as py_impl
 from term.atom import Atom, StrictAtom
 from term.bitstring import BitString
-from term.fun import Fun
+from term.fun import Export, Fun
 from term.list import ImproperList, list_to_unicode_str
 from term.pid import Pid
 from term.port import Port
@@ -332,6 +332,61 @@ def test_encode_ref_words(codec: ModuleType, refid: bytes) -> None:
     """A Reference encodes only with 1..5 whole ID words."""
     with pytest.raises(codec.PyCodecError, match="Reference ID"):
         codec.term_to_binary(Reference("a@b", 1, refid), None)
+
+
+# Module lists and function map as SMALL_ATOM_UTF8_EXT.
+_LISTS_MAP = bytes([119, 5]) + b"lists" + bytes([119, 3]) + b"map"
+
+
+@pytest.mark.parametrize(
+    "data,otp29",
+    [
+        # Arity as INTEGER_EXT and as SMALL_BIG_EXT: OTP 29 accepts both.
+        (bytes([131, 113]) + _LISTS_MAP + bytes([98, 0, 0, 0, 2]), None),
+        (bytes([131, 113]) + _LISTS_MAP + bytes([110, 1, 0, 2]), None),
+        # term_to_binary(fun lists:map/2, [{minor_version, 1}]): Latin-1 atoms.
+        (
+            bytes([131, 113, 100, 0, 5])
+            + b"lists"
+            + bytes([100, 0, 3])
+            + b"map"
+            + bytes([97, 2]),
+            None,
+        ),
+        # Arity 256: OTP 29 writes it as INTEGER_EXT.
+        (
+            bytes([131, 113]) + _LISTS_MAP + bytes([98, 0, 0, 1, 0]),
+            bytes([131, 113]) + _LISTS_MAP + bytes([98, 0, 0, 1, 0]),
+        ),
+    ],
+    ids=["arity_int_ext", "arity_small_big", "latin1_atoms", "arity_256"],
+)
+def test_decode_export(codec: ModuleType, data: bytes, otp29: bytes | None) -> None:
+    """Re-encoded as OTP 29's ``term_to_binary(binary_to_term(Data))``
+    gives it; ``None`` means the bytes of ``fun lists:map/2``."""
+    if otp29 is None:
+        otp29 = (FIXTURE_DIR / "fun_export.etf").read_bytes()
+    value, tail = codec.binary_to_term(data, None)
+    assert tail == b""
+    assert isinstance(value, Export)
+    assert codec.term_to_binary(value, None) == otp29
+
+
+def test_decode_export_atoms_stay_atoms(codec: ModuleType) -> None:
+    """``fun true:map/2``: the module is the atom, not Python's True, and
+    the atom options do not apply."""
+    data = (
+        bytes([131, 113, 119, 4]) + b"true" + bytes([119, 3]) + b"map" + bytes([97, 2])
+    )
+    value, _tail = codec.binary_to_term(data, {"atom": "str"})
+    assert value == Export(Atom("true"), Atom("map"), 2)
+    assert type(value.module_) is Atom
+
+
+@pytest.mark.parametrize("arity", [-1, 2**59, 1.5])
+def test_encode_export_bad_arity(codec: ModuleType, arity: Any) -> None:
+    with pytest.raises(codec.PyCodecError, match="arity"):
+        codec.term_to_binary(Export("lists", "map", arity), None)
 
 
 def test_reference_create_is_distinct() -> None:

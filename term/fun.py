@@ -11,7 +11,46 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from term.atom import Atom
 from term.basetypes import BaseTerm, Term
+
+# Mixed into the hash so that an export never hashes like a tuple of its fields.
+EXPORT_MARKER = "pyrlang.Export"
+
+
+class Export(BaseTerm):
+    """An external fun, ``fun Module:Function/Arity`` (``EXPORT_EXT``). Not
+    callable from Python, but it can be sent back to Erlang unchanged.
+
+    :param module: the module, an atom
+    :param function: the function name, an atom
+    :param arity: the number of arguments, 0 or more
+    """
+
+    def __init__(self, module: str, function: str, arity: int) -> None:
+        self.module_ = Atom.from_string_or_atom(module)
+        self.function_ = Atom.from_string_or_atom(function)
+        self.arity_ = arity
+
+    def __repr__(self) -> str:
+        return "Export(%r, %r, %d)" % (self.module_, self.function_, self.arity_)
+
+    def __str__(self) -> str:
+        return "fun %s:%s/%d" % (self.module_, self.function_, self.arity_)
+
+    def __eq__(self, other: object) -> bool:
+        return (
+            isinstance(other, Export)
+            and self.module_ == other.module_
+            and self.function_ == other.function_
+            and self.arity_ == other.arity_
+        )
+
+    def __ne__(self, other: object) -> bool:
+        return not self.__eq__(other)
+
+    def __hash__(self) -> int:
+        return hash((EXPORT_MARKER, self.module_, self.function_, self.arity_))
 
 
 class Fun(BaseTerm):

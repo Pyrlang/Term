@@ -24,6 +24,8 @@ pub const TAG_BIT_BINARY_EXT: u8 = 77;
 
 pub const TAG_COMPRESSED: u8 = 80;
 
+pub const TAG_EXPORT_EXT: u8 = 113;
+
 pub const TAG_FLOAT_EXT: u8 = 99;
 
 pub const TAG_INT: u8 = 98;

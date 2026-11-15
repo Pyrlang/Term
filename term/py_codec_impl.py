@@ -28,7 +28,7 @@ from term import util
 from term.atom import Atom, StrictAtom
 from term.basetypes import Term
 from term.bitstring import BitString
-from term.fun import Fun
+from term.fun import Export, Fun
 from term.list import ImproperList
 from term.pid import Pid
 from term.port import Port
@@ -43,6 +43,8 @@ TAG_BINARY_EXT = 109
 TAG_BIT_BINARY_EXT = 77
 
 TAG_COMPRESSED = 80
+
+TAG_EXPORT_EXT = 113
 
 TAG_FLOAT_EXT = 99
 
@@ -415,13 +417,44 @@ class _Decoder:
                 stack.pop()
 
 
-def _decode_node(reader: _Reader) -> Atom:
-    """The node name of a pid, port or reference: always an ``Atom``,
-    whatever the options and hooks say."""
+def _decode_plain_atom(reader: _Reader, what: str) -> Atom:
+    """An atom that is part of another term (``what``): always an ``Atom``,
+    ``true`` and ``false`` too, whatever the options and hooks say."""
     tag = reader.u8()
     if tag not in _ATOM_TAGS:
-        raise PyCodecError("Node name must be an atom, found tag %d" % tag)
+        raise PyCodecError("%s must be an atom, found tag %d" % (what, tag))
     return Atom(_read_atom_text(reader, tag))
+
+
+def _decode_node(reader: _Reader) -> Atom:
+    """The node name of a pid, port or reference."""
+    return _decode_plain_atom(reader, "Node name")
+
+
+# Largest arity of an export fun: OTP decodes any small integer, at most
+# 2^59 - 1 on a 64-bit emulator (MAX_SMALL).
+_MAX_EXPORT_ARITY = 2**59 - 1
+
+
+def _decode_export_arity(reader: _Reader) -> int:
+    """The Arity of ``EXPORT_EXT``: a non-negative small integer, in any
+    integer encoding (OTP 29 accepts INTEGER_EXT and bignums too)."""
+    tag = reader.u8()
+    if tag == TAG_SMALL_INT:
+        return reader.u8()
+    if tag == TAG_INT:
+        arity = reader.i32()
+    elif tag in (TAG_SMALL_BIG_EXT, TAG_LARGE_BIG_EXT):
+        nbytes = reader.u8() if tag == TAG_SMALL_BIG_EXT else reader.u32()
+        sign = reader.u8()
+        arity = int.from_bytes(reader.read(nbytes), "little")
+        if sign:
+            arity = -arity
+    else:
+        raise PyCodecError("EXPORT_EXT arity must be an integer, found tag %d" % tag)
+    if not 0 <= arity <= _MAX_EXPORT_ARITY:
+        raise PyCodecError("EXPORT_EXT arity is out of range")
+    return arity
 
 
 def binary_to_term_2(data: bytes, options: OptionsType = None) -> tuple[Term, bytes]:
@@ -709,6 +742,11 @@ def _start_term(dec: _Decoder, reader: _Reader) -> Any:
         result = int.from_bytes(reader.read(nbytes), byteorder="little")
         return -result if sign != 0 else result
 
+    if tag == TAG_EXPORT_EXT:
+        module = _decode_plain_atom(reader, "EXPORT_EXT module")
+        function = _decode_plain_atom(reader, "EXPORT_EXT function")
+        return Export(module, function, _decode_export_arity(reader))
+
     if tag == TAG_NEW_FUN_EXT:
         reader.u32()  # Size: OTP ignores it too (TERM-05)
         arity = reader.u8()
@@ -767,6 +805,18 @@ def _pack_pid(val: Pid) -> bytes:
 
 # ID, Serial and Creation of NEW_PID_EXT.
 _PID_FIELDS = struct.Struct(">III")
+
+
+def _pack_export(val: Export) -> bytes:
+    """``EXPORT_EXT``: Module, Function, then Arity as OTP writes integers."""
+    if type(val.arity_) is not int or not 0 <= val.arity_ <= _MAX_EXPORT_ARITY:
+        raise PyCodecError("EXPORT_EXT arity is out of range")
+    return (
+        bytes([TAG_EXPORT_EXT])
+        + _pack_atom(val.module_)
+        + _pack_atom(val.function_)
+        + _pack_int(val.arity_)
+    )
 
 
 def _pack_port(val: Port) -> bytes:
@@ -1008,6 +1058,8 @@ def _start_value(
         out += _pack_pid(val)
     elif isinstance(val, Port):
         out += _pack_port(val)
+    elif isinstance(val, Export):
+        out += _pack_export(val)
     elif isinstance(val, Reference):
         out += _pack_ref(val)
     elif type_val == bytes:
