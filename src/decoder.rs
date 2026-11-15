@@ -60,6 +60,7 @@ pub struct Decoder<'py> {
     cached_ref_pyclass: Option<Bound<'py, PyAny>>,
     cached_fun_pyclass: Option<Bound<'py, PyAny>>,
     cached_export_pyclass: Option<Bound<'py, PyAny>>,
+    cached_record_pyclass: Option<Bound<'py, PyAny>>,
     cached_improper_list_pyclass: Option<Bound<'py, PyAny>>,
     cached_bitstring_pyclass: Option<Bound<'py, PyAny>>,
 }
@@ -84,12 +85,27 @@ enum Frame<'py> {
         key: Option<Bound<'py, PyAny>>,
         remaining: usize,
     },
+    /// RECORD_EXT values; `dict` has the field names (in order) and gets
+    /// the values, `next` indexes `names` for the next value.
+    Record {
+        head: RecordHead<'py>,
+        dict: Bound<'py, PyDict>,
+        names: Vec<Bound<'py, PyAny>>,
+        next: usize,
+    },
     /// NEW_FUN_EXT free variables; the parts before them are in `head`.
     Fun {
         head: FunHead<'py>,
         items: Vec<Bound<'py, PyAny>>,
         remaining: usize,
     },
+}
+
+/// The parts of a RECORD_EXT before its field names.
+struct RecordHead<'py> {
+    module: Bound<'py, PyAny>,
+    name: Bound<'py, PyAny>,
+    exported: bool,
 }
 
 /// The parts of a NEW_FUN_EXT that come before its free variables.
@@ -248,6 +264,7 @@ impl<'py> Decoder<'py> {
             cached_ref_pyclass: None,
             cached_fun_pyclass: None,
             cached_export_pyclass: None,
+            cached_record_pyclass: None,
             cached_improper_list_pyclass: None,
             cached_bitstring_pyclass: None,
         })
@@ -416,6 +433,7 @@ impl<'py> Decoder<'py> {
             consts::TAG_LOCAL_EXT => Err(CodecError::LocalExt),
             consts::TAG_EXPORT_EXT => self.parse_export(reader),
             consts::TAG_NEW_FUN_EXT => return self.start_fun(reader),
+            consts::TAG_RECORD_EXT => return self.start_record(reader),
             _ => Err(CodecError::UnknownTermTagByte { b: tag }),
         }?;
         Ok(Start::Value(value))
@@ -443,6 +461,9 @@ impl<'py> Decoder<'py> {
                 items,
                 remaining: 0,
             } => Ok(Progress::Done(self.make_fun(head, items)?, false)),
+            Frame::Record {
+                head, dict, names, ..
+            } if names.is_empty() => Ok(Progress::Done(self.make_record(head, dict)?, false)),
             frame => Ok(Progress::Waiting(frame)),
         }
     }
@@ -544,6 +565,26 @@ impl<'py> Decoder<'py> {
                     remaining,
                 }))
             }
+            Frame::Record {
+                head,
+                dict,
+                names,
+                next,
+            } => {
+                let field = names
+                    .get(next)
+                    .ok_or(CodecError::BadValue("Record value past its fields"))?;
+                dict.set_item(field, value)?;
+                if next + 1 == names.len() {
+                    return Ok(Progress::Done(self.make_record(head, dict)?, false));
+                }
+                Ok(Progress::Waiting(Frame::Record {
+                    head,
+                    dict,
+                    names,
+                    next: next + 1,
+                }))
+            }
             Frame::Fun {
                 head,
                 mut items,
@@ -603,6 +644,58 @@ impl<'py> Decoder<'py> {
             items: items_for(num_free),
             remaining: num_free,
         }))
+    }
+
+    /// RECORD_EXT after its tag: Flags, Module, Name and the field names are
+    /// read here, as OTP checks them (Flags 0 or 1, atoms, no field twice);
+    /// the values follow as children.
+    fn start_record(&mut self, reader: &mut Reader) -> CodecResult<Start<'py>> {
+        // Each field takes a name (2 bytes or more) and a value (1 or more).
+        let count = read_count(reader, false, 3, "RECORD_EXT")?;
+        let exported = match reader.read_u8()? {
+            0 => false,
+            1 => true,
+            flags => return Err(CodecError::BadRecordFlags { flags }),
+        };
+        let module = self.decode_plain_atom(reader, "RECORD_EXT module")?;
+        let name = self.decode_plain_atom(reader, "RECORD_EXT name")?;
+        let dict = PyDict::new(self.py);
+        let mut names = items_for(count);
+        for _ in 0..count {
+            let field = self.decode_plain_atom(reader, "RECORD_EXT field name")?;
+            if dict.contains(&field)? {
+                return Err(CodecError::DuplicateRecordField {
+                    field: field.str()?.to_string(),
+                });
+            }
+            dict.set_item(&field, self.py.None())?;
+            names.push(field);
+        }
+        Ok(Start::Open(Frame::Record {
+            head: RecordHead {
+                module,
+                name,
+                exported,
+            },
+            dict,
+            names,
+            next: 0,
+        }))
+    }
+
+    /// Build a `term.record.Record` from its head and its fields.
+    fn make_record(
+        &mut self,
+        head: RecordHead<'py>,
+        fields: Bound<'py, PyDict>,
+    ) -> CodecResult<Bound<'py, PyAny>> {
+        let cls = cached_class(
+            self.py,
+            &mut self.cached_record_pyclass,
+            "term.record",
+            "Record",
+        )?;
+        Ok(cls.call1((head.module, head.name, head.exported, fields))?)
     }
 
     /// Build a `term.fun.Fun` from its head and its free variables (a list).

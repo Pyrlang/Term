@@ -68,4 +68,6 @@ fun_local	29	volatile	fun(X) -> X + 1 end	[]	local_fun
 fun_closure	29	volatile	closure(1, two)	[]	local_fun
 record_exported	29	stable	#fix_exported{b = [1, 2]}	[]	record
 record_local	29	stable	#fix_local{x = {1, 2}}	[]	record
+record_empty	29	stable	#fix_empty{}	[]	record
+record_nested	29	stable	#fix_exported{a = #fix_local{x = #fix_empty{}}}	[]	record
 local_ext	29	volatile	{a, 1}	[local]	local_ext

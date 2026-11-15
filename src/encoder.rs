@@ -19,7 +19,7 @@ use super::decoder;
 use super::errors::{CodecError, CodecResult};
 use super::helpers;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyInt, PyList, PyString, PyTuple};
+use pyo3::types::{PyBool, PyBytes, PyDict, PyInt, PyList, PyString, PyTuple};
 use std::borrow::Cow;
 use std::collections::HashSet;
 
@@ -98,7 +98,7 @@ fn patch_fun_size(data: &mut [u8], at: usize) -> CodecResult<()> {
     let size = length_u32(data.len().saturating_sub(at))?;
     let field = data
         .get_mut(at..at.saturating_add(4))
-        .ok_or(CodecError::BadFunValue("Size field is missing"))?;
+        .ok_or(CodecError::BadValue("Size field is missing"))?;
     field.copy_from_slice(&size.to_be_bytes());
     Ok(())
 }
@@ -300,6 +300,7 @@ impl<'py> Encoder<'py> {
             "Port" => self.write_port(term)?,
             "Export" => self.write_export(term)?,
             "Fun" => return self.start_fun(term),
+            "Record" => return self.start_record(term),
             "Reference" => self.write_ref(term)?,
             "bytes" => {
                 let py_bytes = term.cast::<PyBytes>()?;
@@ -506,6 +507,37 @@ impl<'py> Encoder<'py> {
         Ok(())
     }
 
+    /// Start a Record: RECORD_EXT up to its values, which follow as children.
+    fn start_record(&mut self, record: &Bound<'py, PyAny>) -> CodecResult<Step<'py>> {
+        let fields = record.getattr("fields_")?;
+        let Ok(fields) = fields.cast::<PyDict>() else {
+            return Err(CodecError::BadValue("Record fields must be a dict"));
+        };
+        let exported = record.getattr("exported_")?;
+        let Ok(exported) = exported.cast::<PyBool>() else {
+            return Err(CodecError::BadValue("Record exported must be a bool"));
+        };
+        let module = record.getattr("module_")?;
+        let name = record.getattr("name_")?;
+        // Snapshots, as for a dict: names and values in the same order.
+        let names = fields.keys();
+        let values = fields.values();
+        let count = names.len();
+
+        self.data.push(consts::TAG_RECORD_EXT);
+        self.data.push_u32(length_u32(count)?);
+        self.data.push(u8::from(exported.is_true()));
+        self.write_atom_from_cow(module.cast::<PyString>()?.to_cow()?)?;
+        self.write_atom_from_cow(name.cast::<PyString>()?.to_cow()?)?;
+        for field in names.iter() {
+            let Ok(field) = field.cast::<PyString>() else {
+                return Err(CodecError::BadValue("Record field names must be atoms"));
+            };
+            self.write_atom_from_cow(field.to_cow()?)?;
+        }
+        Ok(self.open(record, Children::List(values), count, After::Nothing))
+    }
+
     /// Start a Fun: NEW_FUN_EXT up to its free variables, which follow as
     /// children; Size is filled in once they are written.
     fn start_fun(&mut self, fun: &Bound<'py, PyAny>) -> CodecResult<Step<'py>> {
@@ -515,19 +547,19 @@ impl<'py> Encoder<'py> {
         } else if let Ok(tuple) = free.cast::<PyTuple>() {
             (Children::Tuple(tuple.clone()), tuple.len())
         } else {
-            return Err(CodecError::BadFunValue(
+            return Err(CodecError::BadValue(
                 "Fun free variables must be a list of at most 255",
             ));
         };
         if count > decoder::MAX_FUN_FREE {
-            return Err(CodecError::BadFunValue(
+            return Err(CodecError::BadValue(
                 "Fun free variables must be a list of at most 255",
             ));
         }
         let py_uniq = fun.getattr("uniq_")?;
         let uniq = match py_uniq.cast::<PyBytes>() {
             Ok(b) if b.as_bytes().len() == 16 => b.as_bytes(),
-            _ => return Err(CodecError::BadFunValue("Fun uniq must be 16 bytes")),
+            _ => return Err(CodecError::BadValue("Fun uniq must be 16 bytes")),
         };
         let arity = u8::try_from(small_int(&fun.getattr("arity_")?, 0, "Fun arity")?)
             .map_err(|_| CodecError::IntegerRange { what: "Fun arity" })?;
@@ -545,11 +577,11 @@ impl<'py> Encoder<'py> {
         )?;
         let module = fun.getattr("module_")?;
         let Ok(module) = module.cast::<PyString>() else {
-            return Err(CodecError::BadFunValue("Fun module must be an atom"));
+            return Err(CodecError::BadValue("Fun module must be an atom"));
         };
         let pid = fun.getattr("pid_")?;
         if pid.get_type().name()?.to_cow()? != "Pid" {
-            return Err(CodecError::BadFunValue("Fun pid must be a Pid"));
+            return Err(CodecError::BadValue("Fun pid must be a Pid"));
         }
 
         self.data.push(consts::TAG_NEW_FUN_EXT);

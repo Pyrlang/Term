@@ -15,6 +15,7 @@ from term.fun import Export, Fun
 from term.list import ImproperList, list_to_unicode_str
 from term.pid import Pid
 from term.port import Port
+from term.record import Record
 from term.reference import Reference
 
 # The golden fixtures written by OTP (TERM-03).
@@ -1790,6 +1791,52 @@ def test_decode_local_ext(codec: ModuleType) -> None:
     assert data[1] == 121
     with pytest.raises(codec.PyCodecError, match="LOCAL_EXT"):
         codec.binary_to_term(data, None)
+
+
+def test_decode_record_from_suite(codec: ModuleType) -> None:
+    """native_record_SUITE:gh_11398, y(1, 1): one field, exported. Fields
+    keep their order; values pass through options, names do not."""
+    data = (
+        bytes([131, 67, 0, 0, 0, 1, 1, 119, 19])
+        + b"native_record_SUITE"
+        + bytes([119, 3])
+        + b"exp"
+        + bytes([119, 1])
+        + b"a"
+        + bytes([97, 1])
+    )
+    value, tail = codec.binary_to_term(data, None)
+    assert tail == b""
+    assert value == Record(
+        Atom("native_record_SUITE"), Atom("exp"), True, {Atom("a"): 1}
+    )
+    assert codec.term_to_binary(value, None) == data
+    as_str = codec.binary_to_term(data, {"atom": "str"})[0]
+    assert type(as_str.name_) is Atom and type(next(iter(as_str.fields_))) is Atom
+
+
+def test_record_field_order(codec: ModuleType) -> None:
+    """Fields encode in the dict's order, values with them."""
+    rec = Record("m", "r", False, {Atom("b"): 2, Atom("a"): [1]})
+    value = codec.binary_to_term(codec.term_to_binary(rec, None), None)[0]
+    assert list(value.fields_.items()) == [(Atom("b"), 2), (Atom("a"), [1])]
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        # exported must be a bool
+        Record("m", "r", 1, {}),  # type: ignore[arg-type]  # deliberately bad
+        # field names must be atoms
+        Record("m", "r", True, {1: 2}),  # type: ignore[dict-item]  # deliberately bad
+        # fields must be a dict
+        Record("m", "r", True, [("a", 1)]),  # type: ignore[arg-type]  # deliberately bad
+    ],
+    ids=["exported_int", "field_int", "fields_list"],
+)
+def test_encode_bad_record(codec: ModuleType, record: Record) -> None:
+    with pytest.raises(codec.PyCodecError, match="Record"):
+        codec.term_to_binary(record, None)
 
 
 def test_decode_compressed(codec: ModuleType) -> None:

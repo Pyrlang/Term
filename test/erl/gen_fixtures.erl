@@ -55,10 +55,11 @@
 -define(FIX_NODE, 'fix@host').
 
 -if(?OTP_RELEASE >= 29).
-%% Native records (EEP-79, OTP 29): one exported, one module-local.
+%% Native records (EEP-79, OTP 29): exported, module-local, no fields.
 -export_record([fix_exported]).
 -record #fix_exported{a = 1, b = two}.
 -record #fix_local{x, y = []}.
+-record #fix_empty{}.
 -endif.
 
 %% Entry point for `erl -run gen_fixtures main OutDir`.
@@ -192,9 +193,9 @@ feat(T, F0, Acc) when is_map(T) ->
                            end,
                       feat(V, F0, feat(K, F0, A1))
               end, Acc, T);
-feat(T, _, Acc) ->
+feat(T, F0, Acc) ->
     true = is_native_record(T),
-    [record | Acc].
+    feat_list(record_values(T), F0, [record | Acc]).
 
 %% Walks a list that may be improper.
 feat_list([H | T], F0, Acc) -> feat_list(T, F0, feat(H, F0, Acc));
@@ -381,7 +382,9 @@ funs() ->
 -if(?OTP_RELEASE >= 29).
 records() ->
     [?F(record_exported, stable, #fix_exported{b = [1, 2]}),
-     ?F(record_local, stable, #fix_local{x = {1, 2}})].
+     ?F(record_local, stable, #fix_local{x = {1, 2}}),
+     ?F(record_empty, stable, #fix_empty{}),
+     ?F(record_nested, stable, #fix_exported{a = #fix_local{x = #fix_empty{}}})].
 -else.
 records() ->
     [].

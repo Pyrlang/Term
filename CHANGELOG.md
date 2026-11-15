@@ -98,3 +98,8 @@
 - `LOCAL_EXT` (`term_to_binary(T, [local])`, OTP 26+) raises `PyCodecError`
   saying that only the node that encoded it can decode it, instead of
   `Unknown tag 121`.
+- New `term.Record(module, name, exported, fields)` for OTP 29 native
+  records (`RECORD_EXT`, EEP-79, experimental in OTP 29/30). Both codecs
+  decode and encode it as OTP does: fields in definition order, flags 0 or 1
+  (other bits reserved), no field named twice. Module, name and field names
+  are always `Atom`; field values follow the decode options and hooks.

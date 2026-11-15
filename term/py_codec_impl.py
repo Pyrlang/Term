@@ -33,6 +33,7 @@ from term.fun import Export, Fun
 from term.list import ImproperList
 from term.pid import Pid
 from term.port import Port
+from term.record import Record
 from term.reference import Reference
 
 ETF_VERSION_TAG = 131
@@ -65,6 +66,7 @@ TAG_NIL_EXT = 106
 
 TAG_PID_EXT = 103
 TAG_PORT_EXT = 102
+TAG_RECORD_EXT = 67
 TAG_REFERENCE_EXT = 101
 
 TAG_SMALL_ATOM_EXT = 115
@@ -579,6 +581,7 @@ _LIST_TAIL = 1  # LIST_EXT tail that is not NIL
 _TUPLE = 2
 _MAP = 3  # keys and values in turn
 _FUN = 4  # NEW_FUN_EXT free variables
+_RECORD = 5  # RECORD_EXT values; items_ holds the field names
 
 # _Frame.key_ while a map waits for a key, not a value.
 _NO_KEY: Any = object()
@@ -586,20 +589,23 @@ _NO_KEY: Any = object()
 
 # A compound term whose children are being decoded (see _Decoder.decode).
 class _Frame:
-    __slots__ = ("kind_", "items_", "remaining_", "key_", "fun_")
+    __slots__ = ("kind_", "items_", "remaining_", "key_", "obj_")
 
     def __init__(
         self,
         kind: int,
         remaining: int,
         items: Any,
-        fun: Optional[Fun] = None,
+        obj: Union[Fun, Record, None] = None,
     ) -> None:
         self.kind_ = kind
         self.remaining_ = remaining  # children still to come
-        self.items_ = items  # list of children; a dict for a map
+        # List of children; a dict for a map; field names for a record.
+        self.items_ = items
         self.key_: Any = _NO_KEY
-        self.fun_ = fun  # the fun whose free variables (items_) these are
+        # The fun whose free variables (items_) these are, or the record
+        # whose fields_ the values go to.
+        self.obj_ = obj
 
     def open(self, reader: _Reader) -> tuple[Any, bool]:
         """Just started: itself if children follow, else ``(value, hooked)``."""
@@ -609,8 +615,8 @@ class _Frame:
             return self._list_end(reader)
         if self.kind_ == _TUPLE:
             return (), False
-        if self.kind_ == _FUN:
-            return self.fun_, False
+        if self.kind_ in (_FUN, _RECORD):
+            return self.obj_, False
         return self.items_, False  # an empty map
 
     def _list_end(self, reader: _Reader) -> tuple[Any, bool]:
@@ -646,6 +652,11 @@ class _Frame:
                 # <<108,0,0,0,0,97,42>> is 42 (binary_SUITE:robustness).
                 return value, True
             return ImproperList(self.items_, value), False
+        if kind == _RECORD:
+            assert isinstance(self.obj_, Record)
+            self.obj_.fields_[self.items_[-self.remaining_]] = value
+            self.remaining_ -= 1
+            return (self, False) if self.remaining_ else (self.obj_, False)
         self.items_.append(value)
         self.remaining_ -= 1
         if self.remaining_:
@@ -654,7 +665,29 @@ class _Frame:
             return self._list_end(reader)
         if kind == _TUPLE:
             return tuple(self.items_), False
-        return self.fun_, False  # kind == _FUN; items_ is its free_ list
+        return self.obj_, False  # kind == _FUN; items_ is its free_ list
+
+
+def _start_record(reader: _Reader) -> Any:
+    """``RECORD_EXT`` after its tag: Flags, Module, Name and the field names
+    are read here, as OTP checks them (Flags 0 or 1, atoms, no field twice);
+    the values follow as children."""
+    # Each field takes a name (2 bytes or more) and a value (1 or more).
+    count = _count(reader, reader.u32(), 3, "RECORD_EXT")
+    flags = reader.u8()
+    if flags not in (0, 1):
+        raise PyCodecError("RECORD_EXT flags %d: only the low bit may be set" % flags)
+    module = _decode_plain_atom(reader, "RECORD_EXT module")
+    name = _decode_plain_atom(reader, "RECORD_EXT name")
+    # Field name -> value, the values filled in as they are decoded.
+    fields: dict[str, Any] = {}
+    for _ in range(count):
+        field = _decode_plain_atom(reader, "RECORD_EXT field name")
+        if field in fields:
+            raise PyCodecError("RECORD_EXT field %s appears twice" % field)
+        fields[field] = None
+    record = Record(module, name, flags == 1, fields)
+    return _Frame(_RECORD, count, list(fields), record)
 
 
 def _finite(value: float) -> float:
@@ -826,6 +859,9 @@ def _start_term(dec: _Decoder, reader: _Reader) -> Any:
 
     if tag == TAG_NEW_FUN_EXT:
         return _start_fun(reader)
+
+    if tag == TAG_RECORD_EXT:
+        return _start_record(reader)
 
     raise PyCodecError("Unknown tag %d" % tag)
 
@@ -1141,6 +1177,8 @@ def _start_value(
         out += _pack_export(val)
     elif isinstance(val, Fun):
         return _start_fun_value(val, out)
+    elif isinstance(val, Record):
+        return _start_record_value(val, out)
     elif isinstance(val, Reference):
         out += _pack_ref(val)
     elif type_val == bytes:
@@ -1187,6 +1225,27 @@ def _start_fun_value(val: Fun, out: bytearray) -> Optional[_EncFrame]:
         _patch_fun_size(out, size_at)
         return None
     return (val, iter(free), size_at)
+
+
+def _start_record_value(val: Record, out: bytearray) -> Optional[_EncFrame]:
+    """Write ``RECORD_EXT`` up to its values, which follow as children."""
+    fields = val.fields_
+    if not isinstance(fields, dict):
+        raise PyCodecError("Record fields must be a dict")
+    if type(val.exported_) is not bool:
+        raise PyCodecError("Record exported must be a bool")
+    out.append(TAG_RECORD_EXT)
+    out += _U32.pack(len(fields))
+    out.append(1 if val.exported_ else 0)
+    out += _pack_atom(val.module_)
+    out += _pack_atom(val.name_)
+    for field in fields:
+        if not isinstance(field, str):
+            raise PyCodecError("Record field names must be atoms")
+        out += _pack_atom(field)
+    if not fields:
+        return None
+    return (val, iter(list(fields.values())), _END_NOTHING)
 
 
 def _patch_fun_size(out: bytearray, size_at: int) -> None:

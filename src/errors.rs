@@ -59,9 +59,15 @@ pub enum CodecError {
     // NEW_FUN_EXT whose creator pid is not a pid.
     #[error("NEW_FUN_EXT pid must be a pid, found tag {b}")]
     FunPidNotAPid { b: u8 },
-    // A Fun to encode with a field of the wrong type or out of range.
+    // A Fun or Record to encode with a field of the wrong type or range.
     #[error("{0}")]
-    BadFunValue(&'static str),
+    BadValue(&'static str),
+    // RECORD_EXT flags other than 0 or 1 (the other bits are reserved).
+    #[error("RECORD_EXT flags {flags}: only the low bit may be set")]
+    BadRecordFlags { flags: u8 },
+    // RECORD_EXT naming a field twice (ERTS 17.1 rejects it, GH-11398).
+    #[error("RECORD_EXT field {field} appears twice")]
+    DuplicateRecordField { field: String },
     #[error("Read failed: {0}")]
     ReadError(#[from] ReadError),
     // A Python call failed (a user hook raised, a type check failed); the

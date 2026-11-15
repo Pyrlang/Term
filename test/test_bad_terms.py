@@ -17,7 +17,9 @@ Inputs:
   counts larger than the input, broken compressed terms) and
   ``node_containers.*`` (TERM-11: reference word counts and old-tag values
   out of range), ``floats.*`` (TERM-14: ``FLOAT_EXT`` text OTP refuses),
-  ``atoms.*`` (TERM-15: more than 255 characters). Each must be rejected.
+  ``atoms.*`` (TERM-15: more than 255 characters), ``native_record_SUITE.*``
+  (TERM-17: from that suite, and a field count beyond the input). Each must
+  be rejected.
 - Every fixture of both OTP-written sets (TERM-03, TERM-04), broken by the
   generators of ``etf_mutations.py``: truncated (must be rejected), a length
   field maxed out (must be rejected), and single bytes corrupted as OTP's
@@ -385,6 +387,37 @@ def _atoms() -> Iterator[BadVector]:
     yield BadVector("utf8_256_2byte", b"\x83v\x02\x00" + two_byte_256)
 
 
+def _record_ext(flags: int, fields: list[bytes], values: list[bytes]) -> bytes:
+    """RECORD_EXT of native_record_SUITE (fake_record_bin/4 there, and y/2):
+    module native_record_SUITE, name fake."""
+    module = bytes([119, 19]) + b"native_record_SUITE"
+    name = bytes([119, 4]) + b"fake"
+    return (
+        bytes([131, 67])
+        + _u32(len(fields))
+        + bytes([flags])
+        + module
+        + name
+        + b"".join(fields)
+        + b"".join(values)
+    )
+
+
+def _native_record_suite() -> Iterator[BadVector]:
+    # From native_record_SUITE:external_term_format: reserved flag bits
+    # (the suite tries 2..255; a sample here).
+    for flags in (2, 3, 4, 128, 255):
+        yield BadVector("flags_%d" % flags, _record_ext(flags, [], []))
+    # From native_record_SUITE:gh_11398: a field named twice.
+    a = bytes([119, 1]) + b"a"
+    yield BadVector("field_twice", _record_ext(1, [a, a], [bytes([97, 1])] * 2))
+    # Plan step TERM-17: more fields than the input can hold.
+    yield BadVector(
+        "fields_beyond_input",
+        bytes([131, 67]) + _u32(0xFFFFFFFF) + bytes([1, 119, 1, 109, 119, 1, 110]),
+    )
+
+
 def _otp_8180() -> Iterator[BadVector]:
     # From binary_SUITE:otp_8180 (binary_SUITE_data/zzz.terms.*)
     for path in sorted(BAD_DIR.glob("binary_SUITE.otp_8180.*.etf")):
@@ -407,6 +440,7 @@ def _all_bad_vectors() -> list[BadVector]:
         "node_containers": _node_containers,
         "floats": _floats,
         "atoms": _atoms,
+        "native_record_SUITE": _native_record_suite,
     }
     return [
         BadVector("%s.%s" % (origin, v.name), v.data)

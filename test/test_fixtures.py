@@ -24,6 +24,7 @@ from term.fun import Export
 from term.list import ImproperList
 from term.pid import Pid
 from term.port import Port
+from term.record import Record
 from term.reference import Reference
 
 # Where gen_fixtures.erl writes its output.
@@ -59,10 +60,7 @@ def _load_manifest() -> list[_Fixture]:
 FIXTURES = _load_manifest()
 
 # Fixtures that neither codec decodes yet, and the plan step that fixes them.
-NOT_DECODED: dict[str, str] = {
-    "record_exported": "TERM-17",
-    "record_local": "TERM-17",
-}
+NOT_DECODED: dict[str, str] = {}
 
 # Fixtures that one codec does not decode yet: (name, codec id) -> plan step.
 NOT_DECODED_BY: dict[tuple[str, str], str] = {}
@@ -76,6 +74,17 @@ REJECTED = {"map_list_key", "map_map_key", "local_ext"}
 REJECTED_WRONGLY_BY: dict[tuple[str, str], str] = {}
 
 _FIX_NODE = Atom("fix@host")
+
+
+def _rec(name: str, exported: bool, **fields: Any) -> Record:
+    """A native record of module gen_fixtures."""
+    return Record(
+        Atom("gen_fixtures"),
+        Atom(name),
+        exported,
+        {Atom(k): v for k, v in fields.items()},
+    )
+
 
 # Key order of fixture map_33 (more than 32 keys: OTP's internal hash order).
 _MAP_33_OTP_ORDER = [22, 26, 27, 5, 21, 30, 16, 3, 33, 14, 24, 17, 11, 6, 20, 28]
@@ -147,6 +156,17 @@ EXPECTED: dict[str, Any] = {
     "port_2p28": Port(_FIX_NODE, 2**28, 1),
     "port_2p64_minus_1": Port(_FIX_NODE, 2**64 - 1, 0xFFFFFFFF),
     "fun_export": Export(Atom("lists"), Atom("map"), 2),
+    # Native records (OTP 29) of module gen_fixtures; fields in definition order.
+    # [1, 2] is written as STRING_EXT, which decodes to str.
+    "record_exported": _rec("fix_exported", True, a=1, b="\x01\x02"),
+    "record_local": _rec("fix_local", False, x=(1, 2), y=[]),
+    "record_empty": _rec("fix_empty", False),
+    "record_nested": _rec(
+        "fix_exported",
+        True,
+        a=_rec("fix_local", False, x=_rec("fix_empty", False), y=[]),
+        b=Atom("two"),
+    ),
     "ref_1_word": Reference(_FIX_NODE, 1, struct.pack(">I", 1)),
     "ref_3_words": Reference(_FIX_NODE, 1, struct.pack(">3I", 1, 2, 3)),
     "ref_5_words": Reference(_FIX_NODE, 1, struct.pack(">5I", 1, 2, 3, 4, 5)),

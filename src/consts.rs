@@ -44,6 +44,7 @@ pub const TAG_NIL_EXT: u8 = 106;
 
 pub const TAG_PID_EXT: u8 = 103;
 pub const TAG_PORT_EXT: u8 = 102;
+pub const TAG_RECORD_EXT: u8 = 67;
 pub const TAG_REFERENCE_EXT: u8 = 101;
 
 pub const TAG_SMALL_ATOM_EXT: u8 = 115;

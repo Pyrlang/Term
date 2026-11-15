@@ -23,9 +23,7 @@ FIXTURE_DIR = Path(__file__).parent / "fixtures"
 OTP_VECTOR_DIR = FIXTURE_DIR / "otp"
 
 # Features that neither codec decodes yet -> plan step.
-DECODE_BLOCKED: dict[str, str] = {
-    "record": "TERM-17",
-}
+DECODE_BLOCKED: dict[str, str] = {}
 
 # Features that one codec does not decode yet: (feature, codec id) -> step.
 DECODE_BLOCKED_BY: dict[tuple[str, str], str] = {}
