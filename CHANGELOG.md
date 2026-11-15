@@ -5,6 +5,8 @@
 - New decode option `"atom_cache"`: a list or tuple of atom texts that
   `ATOM_CACHE_REF` (tag 82) refers to, for terms that follow a distribution
   header. Without the option tag 82 raises `PyCodecError`.
+  `term.codec` gains `binary_to_term_2` and `term_to_binary_2` for terms
+  without the 131 header byte.
 - Decoding options (`atom`, `atom_call`, `byte_string`) and `decode_hook`
   apply to every nested term in both codecs. The Python codec used to apply
   them to the outermost term only. `atom_call` takes precedence over `atom`.

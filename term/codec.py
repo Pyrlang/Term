@@ -82,6 +82,34 @@ def term_to_binary(
     return co_impl.term_to_binary(term, opt)
 
 
+def binary_to_term_2(
+    data: bytes, options: _Options = None, decode_hook: _Hooks = None
+) -> tuple[Term, bytes]:
+    """Decode a term that has no 131 header byte, as the terms that follow a
+    distribution header; with the option ``"atom_cache"`` (a list of atom
+    texts) ``ATOM_CACHE_REF`` refers to its entries.
+
+    :param options: as for :py:func:`binary_to_term`
+    :raises PyCodecError: on malformed input
+    :returns: Value and Remaining unconsumed bytes
+    """
+    opt = options if options else {}
+    if decode_hook:
+        opt["decode_hook"] = decode_hook
+    return co_impl.binary_to_term_2(data, opt)
+
+
+def term_to_binary_2(
+    term: object, options: _Options = None, encode_hook: _Hooks = None
+) -> bytes:
+    """Encode a term without the 131 header byte; otherwise as
+    :py:func:`term_to_binary`.
+    """
+    # The two implementations take different arguments for their own
+    # term_to_binary_2; dropping the header byte works with both.
+    return term_to_binary(term, options, encode_hook)[1:]
+
+
 PyCodecError = co_impl.PyCodecError
 
 # aliases
@@ -92,6 +120,8 @@ decode = unpack = loads = binary_to_term
 __all__ = [
     "term_to_binary",
     "binary_to_term",
+    "term_to_binary_2",
+    "binary_to_term_2",
     "PyCodecError",
     "encode",
     "decode",

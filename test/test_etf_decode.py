@@ -1970,3 +1970,15 @@ def test_decode_atom_cache_ref_rejected(
         codec.binary_to_term_2(data, options)
     with pytest.raises(codec.PyCodecError):
         codec.binary_to_term(b"\x83" + data, options)
+
+
+def test_codec_front_door_without_header_byte() -> None:
+    """`term.codec` decodes and encodes terms that have no 131 byte."""
+    from term import codec as front
+
+    options = {"atom_cache": ATOM_CACHE}
+    control, tail = front.binary_to_term_2(ATOM_CACHE_CONTROL + b"\x61\x01", options)
+    assert control == (6, Pid("a@host", 85, 0, 2), Atom("b@host"), Atom("reg"))
+    assert tail == b"\x61\x01"
+    # term_to_binary({a, 1}) on OTP 29 is <<131,104,2,119,1,97,97,1>>
+    assert front.term_to_binary_2((Atom("a"), 1)) == bytes([104, 2, 119, 1, 97, 97, 1])
