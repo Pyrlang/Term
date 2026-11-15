@@ -60,7 +60,6 @@ FIXTURES = _load_manifest()
 
 # Fixtures that neither codec decodes yet, and the plan step that fixes them.
 NOT_DECODED: dict[str, str] = {
-    "float_1_5_minor_0": "TERM-14",
     "record_exported": "TERM-17",
     "record_local": "TERM-17",
 }

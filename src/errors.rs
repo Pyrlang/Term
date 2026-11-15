@@ -110,6 +110,9 @@ pub enum CodecError {
     // A list, string or tuple longer than its 32-bit length field.
     #[error("{} elements do not fit a 32-bit length", size)]
     TooLong { size: usize },
+    // FLOAT_EXT whose 31 bytes are not a float's text ended by a NUL.
+    #[error("FLOAT_EXT does not hold a float")]
+    BadFloatText,
     #[error("Float value {} is not finite", f)]
     NonFiniteFloat { f: f64 },
     #[error("Encoding error")]

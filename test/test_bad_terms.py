@@ -16,7 +16,8 @@ Inputs:
   ``node_container_SUITE:bad_nc``), ``limits.*`` (plan step TERM-09:
   counts larger than the input, broken compressed terms) and
   ``node_containers.*`` (TERM-11: reference word counts and old-tag values
-  out of range). Each must be rejected.
+  out of range), ``floats.*`` (TERM-14: ``FLOAT_EXT`` text OTP refuses).
+  Each must be rejected.
 - Every fixture of both OTP-written sets (TERM-03, TERM-04), broken by the
   generators of ``etf_mutations.py``: truncated (must be rejected), a length
   field maxed out (must be rejected), and single bytes corrupted as OTP's
@@ -360,6 +361,21 @@ def _node_containers() -> Iterator[BadVector]:
     yield BadVector("ref_ext_creation_4", b"\x83e" + node + _u32(5) + b"\x04")
 
 
+def _float_ext(text: bytes) -> bytes:
+    """``FLOAT_EXT`` holding ``text``, NUL-padded to 31 bytes."""
+    return bytes([131, 99]) + text.ljust(31, b"\0")
+
+
+def _floats() -> Iterator[BadVector]:
+    # Plan step TERM-14: FLOAT_EXT text that OTP's sys_chars_to_double
+    # refuses (checked by test_otp_rejects_them_too).
+    yield BadVector("float_ext_garbage", _float_ext(b"abc"))
+    yield BadVector("float_ext_overflow", _float_ext(b"1.0e400"))
+    yield BadVector("float_ext_no_fraction", _float_ext(b"1e5"))
+    yield BadVector("float_ext_space", _float_ext(b" 1.5"))
+    yield BadVector("float_ext_nan", _float_ext(b"nan"))
+
+
 def _otp_8180() -> Iterator[BadVector]:
     # From binary_SUITE:otp_8180 (binary_SUITE_data/zzz.terms.*)
     for path in sorted(BAD_DIR.glob("binary_SUITE.otp_8180.*.etf")):
@@ -380,6 +396,7 @@ def _all_bad_vectors() -> list[BadVector]:
         "node_container_SUITE.bad_nc": _bad_nc,
         "limits": _limits,
         "node_containers": _node_containers,
+        "floats": _floats,
     }
     return [
         BadVector("%s.%s" % (origin, v.name), v.data)
@@ -615,8 +632,6 @@ def _vector_blocks() -> tuple[dict[str, str], dict[tuple[str, str], str]]:
     both: dict[str, str] = {}
     by: dict[tuple[str, str], str] = {}
     b = "binary_SUITE."
-    # NEW_FLOAT_EXT must be finite.
-    both[b + "bad_binary_to_term.float_nan"] = "TERM-14"
     # Atoms have at most 255 characters.
     both[b + "otp_5484.atom_65000"] = "TERM-15"
     both[b + "otp_5484.atom_256"] = "TERM-15"

@@ -85,3 +85,7 @@
   or atom options; free variables are a `list` in both codecs (native gave a
   `tuple`). `Fun` has equality (the creator pid does not count, as in
   Erlang), hash and repr.
+- Both codecs decode `FLOAT_EXT` (`term_to_binary(F, [{minor_version, 0}])`)
+  and accept and reject its text as OTP 29 does; floats are still encoded only
+  as `NEW_FLOAT_EXT`. A NaN or infinite `NEW_FLOAT_EXT` raises `PyCodecError`
+  (both codecs returned `nan`).

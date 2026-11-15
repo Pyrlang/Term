@@ -1726,6 +1726,33 @@ def test_encode_fun_bad_fields(codec: ModuleType) -> None:
             codec.term_to_binary(fun, None)
 
 
+@pytest.mark.parametrize(
+    "text,value",
+    [
+        # What OTP 29's binary_to_term gives for these (sys_chars_to_double).
+        (b"1,5e+00", 1.5),  # either radix character
+        (b"1.0e-400", 0.0),  # an underflow is accepted
+        (b"1.5\0xyz", 1.5),  # the text ends at the first NUL
+        (b"-2.25", -2.25),
+    ],
+)
+def test_decode_float_ext(codec: ModuleType, text: bytes, value: float) -> None:
+    data = bytes([131, 99]) + text.ljust(31, b"\0")
+    decoded, tail = codec.binary_to_term(data, None)
+    assert tail == b""
+    assert type(decoded) is float and decoded == value
+    # Encoded back as NEW_FLOAT_EXT, never FLOAT_EXT.
+    assert codec.term_to_binary(decoded, None)[1] == 70
+
+
+def test_decode_float_ext_without_nul(codec: ModuleType) -> None:
+    """31 bytes of float text with no NUL: OTP would read past the term to
+    find the end of the text; we refuse it."""
+    data = bytes([131, 99]) + b"1." + b"0" * 29
+    with pytest.raises(codec.PyCodecError, match="FLOAT_EXT"):
+        codec.binary_to_term(data, None)
+
+
 def test_decode_compressed(codec: ModuleType) -> None:
     """tries to decode compressed data: what OTP 29 writes for
     term_to_binary(<<"Lorem...">>, [compressed]). The vector used before had

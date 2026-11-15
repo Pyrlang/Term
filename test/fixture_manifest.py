@@ -24,7 +24,6 @@ OTP_VECTOR_DIR = FIXTURE_DIR / "otp"
 
 # Features that neither codec decodes yet -> plan step.
 DECODE_BLOCKED: dict[str, str] = {
-    "float_ext": "TERM-14",
     "record": "TERM-17",
 }
 

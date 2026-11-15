@@ -18,6 +18,7 @@ used by the network distribution layer.
 
 import itertools
 import math
+import re
 import struct
 from collections.abc import Iterator
 from typing import Any, Callable, NoReturn, Optional, Union
@@ -647,6 +648,29 @@ class _Frame:
         return self.fun_, False  # kind == _FUN; items_ is its free_ list
 
 
+def _finite(value: float) -> float:
+    """``value`` if it is finite: Erlang has no NaN or infinity."""
+    if not math.isfinite(value):
+        raise PyCodecError("Float value %s is not finite" % value)
+    return value
+
+
+# The text of a FLOAT_EXT, as OTP's sys_chars_to_double accepts it: sign,
+# digits, '.' or ',', digits, optional exponent.
+_FLOAT_TEXT = re.compile(rb"[+-]?[0-9]+[.,][0-9]+(?:[eE][+-]?[0-9]+)?")
+
+
+def _float_ext_value(raw: bytes) -> float:
+    """The value of ``FLOAT_EXT``'s 31 bytes: ``"%.20e"`` text ended by a NUL
+    (OTP would read past the term to find one; we require it here)."""
+    end = raw.find(0)
+    if end < 0 or not _FLOAT_TEXT.fullmatch(raw, 0, end):
+        raise PyCodecError("FLOAT_EXT does not hold a float")
+    # An overflow is infinite and rejected; an underflow is 0.0 or
+    # subnormal and accepted, as in OTP.
+    return _finite(float(raw[:end].replace(b",", b".")))
+
+
 def _tiny_creation(reader: _Reader, what: str) -> int:
     """The 8-bit Creation of an old node-container tag: at most 3
     (``is_tiny_creation`` in OTP's external.c)."""
@@ -768,7 +792,10 @@ def _start_term(dec: _Decoder, reader: _Reader) -> Any:
         return dec.bitstring(_mask_last_byte(value, bits), bits)
 
     if tag == TAG_NEW_FLOAT_EXT:
-        return reader.f64()
+        return _finite(reader.f64())
+
+    if tag == TAG_FLOAT_EXT:
+        return _float_ext_value(reader.read(31))
 
     if tag in (TAG_SMALL_BIG_EXT, TAG_LARGE_BIG_EXT):
         nbytes = reader.u8() if tag == TAG_SMALL_BIG_EXT else reader.u32()
@@ -956,9 +983,8 @@ def _pack_str(val: str) -> bytes:
 
 
 def _pack_float(val: float) -> bytes:
-    if not math.isfinite(val):
-        raise PyCodecError("Float value %s is not finite" % val)
-    return bytes([TAG_NEW_FLOAT_EXT]) + struct.pack(">d", val)
+    """Always ``NEW_FLOAT_EXT``; ``FLOAT_EXT`` is decoded only."""
+    return bytes([TAG_NEW_FLOAT_EXT]) + _F64.pack(_finite(val))
 
 
 def _check_bits(size: int, bits: int) -> None:

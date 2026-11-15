@@ -375,7 +375,14 @@ impl<'py> Decoder<'py> {
                 let sign = reader.read_u8()?;
                 self.parse_arbitrary_length_int(reader, size, sign)
             }
-            consts::TAG_NEW_FLOAT_EXT => self.parse_number::<f64>(reader),
+            consts::TAG_NEW_FLOAT_EXT => {
+                let value = finite(reader.read_f64()?)?;
+                Ok(value.into_bound_py_any(self.py)?)
+            }
+            consts::TAG_FLOAT_EXT => {
+                let value = float_ext_value(reader.read(31)?)?;
+                Ok(value.into_bound_py_any(self.py)?)
+            }
             consts::TAG_MAP_EXT => {
                 let pairs = read_count(reader, false, 2, "MAP_EXT")?;
                 return Ok(Start::Open(Frame::Map {
@@ -892,6 +899,69 @@ impl<'py> Decoder<'py> {
 }
 // end impl
 
+/// `value` if it is finite: Erlang has no NaN or infinity.
+fn finite(value: f64) -> CodecResult<f64> {
+    if !value.is_finite() {
+        return Err(CodecError::NonFiniteFloat { f: value });
+    }
+    Ok(value)
+}
+
+/// The value of FLOAT_EXT's 31 bytes: `"%.20e"` text ended by a NUL (OTP
+/// would read past the term to find one; we require it here). The text must
+/// be as OTP's sys_chars_to_double accepts it: sign, digits, '.' or ',',
+/// digits, optional exponent. An overflow is infinite and rejected; an
+/// underflow is 0.0 or subnormal and accepted, as in OTP.
+fn float_ext_value(raw: &[u8]) -> CodecResult<f64> {
+    let text = raw
+        .iter()
+        .position(|&b| b == 0)
+        .and_then(|end| raw.get(..end))
+        .filter(|t| is_float_text(t))
+        .ok_or(CodecError::BadFloatText)?;
+    let text: String = text
+        .iter()
+        .map(|&b| if b == b',' { '.' } else { char::from(b) })
+        .collect();
+    finite(text.parse().map_err(|_| CodecError::BadFloatText)?)
+}
+
+/// `[+-]?[0-9]+[.,][0-9]+([eE][+-]?[0-9]+)?`, the whole of `t`.
+fn is_float_text(t: &[u8]) -> bool {
+    fn sign(t: &[u8], i: usize) -> usize {
+        if matches!(t.get(i), Some(b'+' | b'-')) {
+            i + 1
+        } else {
+            i
+        }
+    }
+    /// Past the digits at `i`, or None if there are none.
+    fn digits(t: &[u8], i: usize) -> Option<usize> {
+        let n = t
+            .get(i..)?
+            .iter()
+            .take_while(|b| b.is_ascii_digit())
+            .count();
+        (n > 0).then_some(i + n)
+    }
+    let Some(i) = digits(t, sign(t, 0)) else {
+        return false;
+    };
+    if !matches!(t.get(i), Some(b'.' | b',')) {
+        return false;
+    }
+    let Some(mut i) = digits(t, i + 1) else {
+        return false;
+    };
+    if matches!(t.get(i), Some(b'e' | b'E')) {
+        match digits(t, sign(t, i + 1)) {
+            Some(end) => i = end,
+            None => return false,
+        }
+    }
+    i == t.len()
+}
+
 /// Read the 8-bit Creation of an old node-container tag: at most 3
 /// (`is_tiny_creation` in OTP's external.c).
 fn read_tiny_creation(reader: &mut Reader, what: &'static str) -> CodecResult<u8> {
@@ -1009,8 +1079,32 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        first_ref_word, inflate, read_export_arity, read_ref_words, read_tiny_creation, MAX_SMALL,
+        first_ref_word, float_ext_value, inflate, read_export_arity, read_ref_words,
+        read_tiny_creation, MAX_SMALL,
     };
+
+    #[test]
+    fn float_ext_text() {
+        let mut raw = b"1.50000000000000000000e+00".to_vec();
+        raw.resize(31, 0);
+        assert_eq!(float_ext_value(&raw).unwrap(), 1.5);
+        for good in [&b"-2,5\0"[..], b"+3.0E-2\0xyz", b"1.0e-400\0"] {
+            assert!(float_ext_value(good).is_ok(), "{good:?}");
+        }
+        for bad in [
+            &b"1.5"[..],
+            b"1e5\0",
+            b".5\0",
+            b"1.\0",
+            b"1.5e\0",
+            b"1.5 \0",
+            b"nan\0",
+            b"1.0e400\0",
+            b"\0",
+        ] {
+            assert!(float_ext_value(bad).is_err(), "{bad:?}");
+        }
+    }
 
     #[test]
     fn export_arity_encodings() {
