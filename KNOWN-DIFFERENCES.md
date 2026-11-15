@@ -29,6 +29,13 @@ when the difference is gone.
   `PyCodecError`, as OTP's `badarg` (TERM-18).
 - **Map keys Python cannot hash are rejected.** Example: `#{[a] => 1}` →
   `PyCodecError` ("Map key of type list is not hashable").
+- **Map keys that are equal in Python are merged, silently.** Erlang's `1`,
+  `1.0` and `true` are three keys; in Python `1 == 1.0 == True`. Example:
+  `#{1 => a, 1.0 => b, true => c}`
+  (`<<131,116,0,0,0,3,97,1,119,1,97,70,63,240,0,0,0,0,0,0,119,1,98,119,4,116,114,117,101,119,1,99>>`)
+  → `{1: Atom('c')}` in both codecs. The same for `0`, `0.0`, `-0.0`,
+  `false` and keys containing them (`{1}` and `{1.0}`). Why: Python dict
+  semantics; plan step TERM-23 makes the decoders refuse such maps.
 - **Some values change type on the way through Python.** `true`, `false`,
   `undefined` ↔ `True`, `False`, `None`; `"abc"` (`STRING_EXT`) → `str`, but
   `[97,256,98]` → `list`, `"aĀb"` encodes as that list; `[]` and `""` both
