@@ -21,17 +21,18 @@ ATOM_CLASSES = [
 
 @pytest.mark.parametrize("atom_cls", ATOM_CLASSES)
 def test_encode_atom(codec: ModuleType, atom_cls: type[Atom]) -> None:
-    """Try an atom 'hello' encoded as Latin1 atom (16-bit length)
-    or small atom (8bit length)
+    """ASCII atoms are small UTF-8 atoms (8-bit length): at most 255
+    characters, so at most 255 bytes.
     """
-    # Create and encode 'hello...hello' 52 times (260 bytes)
-    # Expect UTF8 back because encoder only does UTF8 atoms
-    repeat1 = 52
-    example1 = bytes([py_impl.ETF_VERSION_TAG, py_impl.TAG_ATOM_UTF8_EXT, 1, 4]) + (
-        b"hello" * repeat1
-    )
+    # 'hello' 51 times: 255 characters, the most an atom may have
+    repeat1 = 51
+    example1 = bytes([py_impl.ETF_VERSION_TAG, py_impl.TAG_SMALL_ATOM_UTF8_EXT, 255])
+    example1 += b"hello" * repeat1
     b1 = codec.term_to_binary(atom_cls("hello" * repeat1), None)
     assert b1 == example1
+    # 260 characters: OTP refuses such an atom, so do we
+    with pytest.raises(codec.PyCodecError):
+        codec.term_to_binary(atom_cls("hello" * 52), None)
 
     # Create and encode 'hello...hello' 5 times (25 bytes)
     repeat2 = 5

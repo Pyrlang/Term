@@ -16,8 +16,8 @@ Inputs:
   ``node_container_SUITE:bad_nc``), ``limits.*`` (plan step TERM-09:
   counts larger than the input, broken compressed terms) and
   ``node_containers.*`` (TERM-11: reference word counts and old-tag values
-  out of range), ``floats.*`` (TERM-14: ``FLOAT_EXT`` text OTP refuses).
-  Each must be rejected.
+  out of range), ``floats.*`` (TERM-14: ``FLOAT_EXT`` text OTP refuses),
+  ``atoms.*`` (TERM-15: more than 255 characters). Each must be rejected.
 - Every fixture of both OTP-written sets (TERM-03, TERM-04), broken by the
   generators of ``etf_mutations.py``: truncated (must be rejected), a length
   field maxed out (must be rejected), and single bytes corrupted as OTP's
@@ -376,6 +376,15 @@ def _floats() -> Iterator[BadVector]:
     yield BadVector("float_ext_nan", _float_ext(b"nan"))
 
 
+def _atoms() -> Iterator[BadVector]:
+    # Plan step TERM-15: UTF-8 atoms of 256 characters, within the byte
+    # limits of their tags (checked by test_otp_rejects_them_too).
+    ascii_256 = b"a" * 256
+    yield BadVector("utf8_256_ascii", b"\x83v\x01\x00" + ascii_256)
+    two_byte_256 = "é".encode() * 256
+    yield BadVector("utf8_256_2byte", b"\x83v\x02\x00" + two_byte_256)
+
+
 def _otp_8180() -> Iterator[BadVector]:
     # From binary_SUITE:otp_8180 (binary_SUITE_data/zzz.terms.*)
     for path in sorted(BAD_DIR.glob("binary_SUITE.otp_8180.*.etf")):
@@ -397,6 +406,7 @@ def _all_bad_vectors() -> list[BadVector]:
         "limits": _limits,
         "node_containers": _node_containers,
         "floats": _floats,
+        "atoms": _atoms,
     }
     return [
         BadVector("%s.%s" % (origin, v.name), v.data)
@@ -632,9 +642,6 @@ def _vector_blocks() -> tuple[dict[str, str], dict[tuple[str, str], str]]:
     both: dict[str, str] = {}
     by: dict[tuple[str, str], str] = {}
     b = "binary_SUITE."
-    # Atoms have at most 255 characters.
-    both[b + "otp_5484.atom_65000"] = "TERM-15"
-    both[b + "otp_5484.atom_256"] = "TERM-15"
     return both, by
 
 

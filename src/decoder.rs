@@ -1058,7 +1058,17 @@ where
     T: Readable,
 {
     let sz = reader.read_with::<T>()?.into();
-    Ok(Cow::Borrowed(str::from_utf8(reader.read(sz)?)?))
+    let text = str::from_utf8(reader.read(sz)?)?;
+    check_atom_chars(text.chars().count())?;
+    Ok(Cow::Borrowed(text))
+}
+
+/// An atom has at most 255 characters (MAX_ATOM_CHARACTERS in OTP).
+pub fn check_atom_chars(chars: usize) -> CodecResult<()> {
+    if chars > consts::MAX_ATOM_CHARS {
+        return Err(CodecError::AtomTooLong { chars });
+    }
+    Ok(())
 }
 
 /// Read the length (a `T`) and the Latin-1 text of an atom.
@@ -1069,6 +1079,7 @@ where
 {
     let sz = reader.read_with::<T>()?.into();
     let buf = reader.read(sz)?;
+    check_atom_chars(buf.len())?;
     if buf.is_ascii() {
         Ok(Cow::Borrowed(str::from_utf8(buf)?))
     } else {

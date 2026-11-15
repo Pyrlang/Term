@@ -398,6 +398,36 @@ def test_encode_export_bad_arity(codec: ModuleType, arity: Any) -> None:
         codec.term_to_binary(Export("lists", "map", arity), None)
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        Atom("a" * 256),
+        Atom("\U0001f600" * 256),
+        Pid(Atom("n" * 256), 1, 2, 3),
+        Export("m", "f" * 256, 1),
+    ],
+    ids=["ascii", "4byte", "pid_node", "export_function"],
+)
+def test_encode_atom_over_255_characters(codec: ModuleType, value: Any) -> None:
+    """An atom has at most 255 characters, wherever it appears."""
+    with pytest.raises(codec.PyCodecError, match="255"):
+        codec.term_to_binary(value, None)
+
+
+def test_atom_255_characters_round_trip(codec: ModuleType) -> None:
+    """255 four-byte characters: 1020 bytes, ATOM_UTF8_EXT, as OTP 29 writes
+    them (fixture atom_255_4byte); the Latin-1 form decodes to the same atom."""
+    data = (FIXTURE_DIR / "atom_255_4byte.etf").read_bytes()
+    assert data[1] == 118
+    value = codec.binary_to_term(data, None)[0]
+    assert value == Atom("\U0001f600" * 255)
+    assert codec.term_to_binary(value, None) == data
+    latin1 = (FIXTURE_DIR / "atom_latin1_minor_1.etf").read_bytes()
+    utf8 = (FIXTURE_DIR / "atom_latin1.etf").read_bytes()
+    assert latin1 != utf8
+    assert codec.binary_to_term(latin1, None)[0] == codec.binary_to_term(utf8, None)[0]
+
+
 def test_reference_create_is_distinct() -> None:
     refs = {Reference.create("py@host", 1) for _ in range(10_000)}
     assert len(refs) == 10_000

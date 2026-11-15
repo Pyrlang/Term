@@ -117,8 +117,9 @@ pub enum CodecError {
     NonFiniteFloat { f: f64 },
     #[error("Encoding error")]
     EncodingError(#[from] Utf8Error),
-    #[error("Atom too long")]
-    AtomTooLong,
+    // An atom of more than 255 characters (decoding or encoding).
+    #[error("Atom has {chars} characters, at most 255")]
+    AtomTooLong { chars: usize },
 }
 
 pub type CodecResult<T> = Result<T, CodecError>;

@@ -235,14 +235,22 @@ class _Reader:
         return self.data_[start:]
 
 
+# Most characters in an atom (MAX_ATOM_CHARACTERS in OTP).
+_MAX_ATOM_CHARS = 255
+
+
 def _atom_text(name: bytes, tag: int) -> str:
     """The text of an atom: tags 100 and 115 carry Latin-1, 118 and 119 UTF-8."""
     if tag in (TAG_ATOM_EXT, TAG_SMALL_ATOM_EXT):
-        return name.decode("latin-1")
-    try:
-        return name.decode("utf8")
-    except UnicodeDecodeError as e:
-        raise PyCodecError("Atom is not valid UTF-8: %s" % e) from e
+        text = name.decode("latin-1")
+    else:
+        try:
+            text = name.decode("utf8")
+        except UnicodeDecodeError as e:
+            raise PyCodecError("Atom is not valid UTF-8: %s" % e) from e
+    if len(text) > _MAX_ATOM_CHARS:
+        raise PyCodecError("Atom has %d characters, at most 255" % len(text))
+    return text
 
 
 def _read_atom_text(reader: _Reader, tag: int) -> str:
@@ -842,9 +850,15 @@ def _pack_int(val: int) -> bytes:
     return hdr + magnitude.to_bytes(size, "little")
 
 
-# TODO: maybe move this into atom class
 def _pack_atom(text: str) -> bytes:
-    atom_bytes = bytes(text, "utf8")
+    """``SMALL_ATOM_UTF8_EXT`` when the UTF-8 text fits 255 bytes, else
+    ``ATOM_UTF8_EXT``; at most 255 characters (up to 1020 bytes)."""
+    if len(text) > _MAX_ATOM_CHARS:
+        raise PyCodecError("Atom has %d characters, at most 255" % len(text))
+    try:
+        atom_bytes = text.encode("utf8")
+    except UnicodeEncodeError as e:
+        raise PyCodecError("Atom is not valid Unicode: %s" % e) from e
     if len(atom_bytes) < 256:
         return bytes([TAG_SMALL_ATOM_UTF8_EXT, len(atom_bytes)]) + atom_bytes
     return bytes([TAG_ATOM_UTF8_EXT]) + util.to_u16(len(atom_bytes)) + atom_bytes

@@ -61,6 +61,9 @@ pub const TAG_V4_PORT_EXT: u8 = 120;
 /// PORT_EXT, REFERENCE_EXT, NEW_REFERENCE_EXT): ERTS_MAX_TINY_CREATION.
 pub const MAX_TINY_CREATION: u8 = 3;
 
+/// Most characters in an atom (MAX_ATOM_CHARACTERS).
+pub const MAX_ATOM_CHARS: usize = 255;
+
 /// Most ID words in a reference (ERTS_MAX_REF_NUMBERS, OTP 24+).
 pub const MAX_REF_WORDS: u16 = 5;
 

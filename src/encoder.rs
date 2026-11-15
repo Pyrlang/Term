@@ -420,24 +420,23 @@ impl<'py> Encoder<'py> {
         self.write_atom_from_cow(text)
     }
 
-    /// Helper which writes an atom from a PyString's Copy-on-write string.
-    /// Chooses the tag by byte length, not character count (TERM-15).
+    /// Writes an atom: SMALL_ATOM_UTF8_EXT when the UTF-8 text fits 255
+    /// bytes, else ATOM_UTF8_EXT; at most 255 characters (up to 1020 bytes).
     fn write_atom_from_cow(&mut self, text: Cow<str>) -> CodecResult<()> {
-        let byte_array: &[u8] = text.as_bytes();
-        let str_byte_length: usize = byte_array.len();
-
-        if str_byte_length <= u8::MAX as usize {
+        decoder::check_atom_chars(text.chars().count())?;
+        let bytes = text.as_bytes();
+        if let Ok(small) = u8::try_from(bytes.len()) {
             self.data.push(consts::TAG_SMALL_ATOM_UTF8_EXT);
-            self.data.push(str_byte_length as u8); // 8bit length
-            self.data.extend_from_slice(byte_array); // string content
-        } else if str_byte_length <= u16::MAX as usize {
-            self.data.push(consts::TAG_ATOM_UTF8_EXT);
-            self.data.push_u16(str_byte_length as u16); // 16bit length
-            self.data.extend_from_slice(byte_array); // string content
+            self.data.push(small);
         } else {
-            return Err(CodecError::AtomTooLong);
+            // At most 255 characters of at most 4 bytes: fits 16 bits.
+            let len = u16::try_from(bytes.len()).map_err(|_| CodecError::AtomTooLong {
+                chars: text.chars().count(),
+            })?;
+            self.data.push(consts::TAG_ATOM_UTF8_EXT);
+            self.data.push_u16(len);
         }
-
+        self.data.extend_from_slice(bytes);
         Ok(())
     }
 

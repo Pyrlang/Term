@@ -89,3 +89,9 @@
   and accept and reject its text as OTP 29 does; floats are still encoded only
   as `NEW_FLOAT_EXT`. A NaN or infinite `NEW_FLOAT_EXT` raises `PyCodecError`
   (both codecs returned `nan`).
+- Atoms have at most 255 characters, as in OTP: longer ones raise
+  `PyCodecError` on decoding and encoding, in both codecs, wherever they
+  appear (node names, modules too). A Latin-1 atom tag may hold at most 255
+  bytes, a UTF-8 one up to 1020. Both codecs used to accept up to 65535 bytes.
+  An atom text that is not valid Unicode raises `PyCodecError` in the Python
+  encoder (was `UnicodeEncodeError`).
