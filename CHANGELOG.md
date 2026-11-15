@@ -47,3 +47,10 @@
   compressed term is inflated incrementally and only up to its declared
   size, and its zlib stream must be complete: a cut-off checksum used to be
   accepted.
+- Encoding is iterative too, with the same `max_depth` option (default
+  4096): deeper values raise `PyCodecError` in both codecs instead of
+  `RecursionError` (Python, about 350 levels) or a native stack overflow
+  (below 1000 levels in a debug build). A value that contains itself, and
+  hooks (`catch_all`, `__etf__`) that keep returning values with no encoding,
+  raise `PyCodecError` instead of recursing until the stack runs out. Dicts
+  are encoded from a snapshot of their items in the Python codec too.

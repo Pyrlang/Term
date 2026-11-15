@@ -15,11 +15,13 @@
 use crate::helpers::VecWriteExt;
 
 use super::consts;
+use super::decoder;
 use super::errors::{CodecError, CodecResult};
 use super::helpers;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyString, PyTuple};
 use std::borrow::Cow;
+use std::collections::HashSet;
 
 pub struct Encoder<'py> {
     pub py: Python<'py>, // Python instance will live at least as long as Encoder
@@ -28,6 +30,75 @@ pub struct Encoder<'py> {
     pub catch_all: Option<Bound<'py, PyAny>>,
     // A function py_codec_impl.generic_serialize_object used for unknown classes
     pub cached_generic_serialize_fn: Option<Bound<'py, PyAny>>,
+    // Option "max_depth": how deeply compound values may nest.
+    max_depth: usize,
+}
+
+/// The children of a compound value being encoded (see `Encoder::encode`).
+enum Children<'py> {
+    List(Bound<'py, PyList>),
+    Tuple(Bound<'py, PyTuple>),
+    /// A dict's `items()` snapshot: two children (key, value) per item.
+    Pairs(Bound<'py, PyList>),
+}
+
+/// What follows the children of a compound value.
+enum After<'py> {
+    Nothing,
+    /// NIL_EXT: a proper list.
+    Nil,
+    /// The tail of an improper list, encoded as one more child.
+    Tail(Bound<'py, PyAny>),
+}
+
+/// A compound value whose children are being encoded. `container` keeps the
+/// value alive, so its address identifies it while it is open.
+struct Frame<'py> {
+    container: Bound<'py, PyAny>,
+    children: Children<'py>,
+    count: usize,
+    next: usize,
+    after: After<'py>,
+}
+
+impl<'py> Frame<'py> {
+    /// The next child to encode, or None when the frame is finished (its
+    /// closing NIL_EXT, if any, is then written to `data`).
+    fn next_child(&mut self, data: &mut Vec<u8>) -> CodecResult<Option<Bound<'py, PyAny>>> {
+        if self.next < self.count {
+            let i = self.next;
+            self.next += 1;
+            let child = match &self.children {
+                Children::List(list) => list.get_item(i)?,
+                Children::Tuple(tuple) => tuple.get_item(i)?,
+                Children::Pairs(items) => items.get_item(i / 2)?.get_item(i % 2)?,
+            };
+            return Ok(Some(child));
+        }
+        match std::mem::replace(&mut self.after, After::Nothing) {
+            After::Nothing => Ok(None),
+            After::Nil => {
+                data.push(consts::TAG_NIL_EXT);
+                Ok(None)
+            }
+            After::Tail(tail) => Ok(Some(tail)),
+        }
+    }
+}
+
+/// What starting to encode a value gives.
+enum Step<'py> {
+    /// The value is written.
+    Done,
+    /// Its header is written; its children follow.
+    Open(Frame<'py>),
+    /// Encode this value in its place.
+    Substitute(Bound<'py, PyAny>),
+}
+
+/// A 32-bit length or count field, or `TooLong`.
+fn length_u32(size: usize) -> CodecResult<u32> {
+    u32::try_from(size).map_err(|_| CodecError::TooLong { size })
 }
 
 impl<'py> Encoder<'py> {
@@ -38,6 +109,8 @@ impl<'py> Encoder<'py> {
             None => PyDict::new(py),
         };
         let catch_all = encode_hook.get_item("catch_all")?;
+        let max_depth =
+            helpers::get_positive_int_opt(&py_opts, "max_depth", decoder::DEFAULT_MAX_DEPTH)?;
 
         Ok(Encoder {
             py,
@@ -45,59 +118,135 @@ impl<'py> Encoder<'py> {
             encode_hook,
             catch_all,
             cached_generic_serialize_fn: None,
+            max_depth,
         })
     }
 
+    /// Encode a value and append it to `data`.
+    ///
+    /// Iterative: compound values wait on an explicit stack of `Frame`, at
+    /// most `max_depth` of them, so the native stack does not grow with the
+    /// nesting. A value that contains itself is an error, and so is a chain
+    /// of more than `max_depth` substitutions (hooks that keep returning
+    /// values with no encoding of their own).
     pub fn encode(&mut self, py_term: &Bound<'py, PyAny>) -> CodecResult<()> {
-        // If the type name (`__name__`) of the term is in encode_hook, encode
-        // what the hook returns instead
+        let mut stack: Vec<Frame<'py>> = Vec::new();
+        let mut open: HashSet<usize> = HashSet::new();
+        let mut value = py_term.clone();
+        let mut substitutions = 0usize;
+        loop {
+            match self.start_value(&value)? {
+                Step::Substitute(other) => {
+                    substitutions += 1;
+                    if substitutions > self.max_depth {
+                        return Err(CodecError::TooManySubstitutions {
+                            max_depth: self.max_depth,
+                        });
+                    }
+                    value = other;
+                    continue;
+                }
+                Step::Open(frame) => {
+                    if stack.len() >= self.max_depth {
+                        return Err(CodecError::TooDeep {
+                            max_depth: self.max_depth,
+                        });
+                    }
+                    if !open.insert(frame.container.as_ptr() as usize) {
+                        let type_name = frame.container.get_type().name()?.to_string();
+                        return Err(CodecError::Cyclic { type_name });
+                    }
+                    stack.push(frame);
+                }
+                Step::Done => {}
+            }
+            substitutions = 0;
+            // The next child of the innermost open value; close finished ones.
+            loop {
+                let Some(frame) = stack.last_mut() else {
+                    return Ok(());
+                };
+                if let Some(child) = frame.next_child(&mut self.data)? {
+                    value = child;
+                    break;
+                }
+                open.remove(&(frame.container.as_ptr() as usize));
+                stack.pop();
+            }
+        }
+    }
+
+    /// Write a value; or write the header of a compound value and return its
+    /// frame; or return the value to encode in its place. If the type name
+    /// (`__name__`) of the value is in encode_hook, what the hook returns is
+    /// used instead.
+    fn start_value(&mut self, py_term: &Bound<'py, PyAny>) -> CodecResult<Step<'py>> {
         if !self.encode_hook.is_empty() {
             let type_name = py_term.get_type().name()?;
             if let Some(h1) = self.encode_hook.get_item(type_name)? {
                 let repr1 = h1.call1((py_term,))?;
-                return self.encode_default(&repr1);
+                return self.start_default(&repr1);
             }
         }
-        self.encode_default(py_term)
+        self.start_default(py_term)
     }
 
     /// Dispatch on the type name (`__name__`) of the term, not on type
     /// identity (a known defect, plan section 2.2).
-    pub fn encode_default(&mut self, term: &Bound<'py, PyAny>) -> CodecResult<()> {
+    fn start_default(&mut self, term: &Bound<'py, PyAny>) -> CodecResult<Step<'py>> {
         let type_name = term.get_type().name()?;
         let type_name = type_name.to_cow()?;
 
         match type_name.as_ref() {
-            "int" => self.write_int(term),
+            "int" => self.write_int(term)?,
             "float" => {
                 let val: f64 = term.extract()?;
                 if !val.is_finite() {
                     return Err(CodecError::NonFiniteFloat { f: val });
                 }
-                self.write_float(val)
+                self.write_float(val)?
             }
             "list" => {
-                let as_list = term.cast::<PyList>()?;
-                // `[]` is NIL_EXT alone, as OTP writes it
-                if !as_list.is_empty() {
-                    self.write_list_no_tail(as_list)?;
+                let list = term.cast::<PyList>()?;
+                if list.is_empty() {
+                    // `[]` is NIL_EXT alone, as OTP writes it
+                    self.data.push(consts::TAG_NIL_EXT);
+                    return Ok(Step::Done);
                 }
-                self.data.push(consts::TAG_NIL_EXT);
-                Ok(())
+                let count = list.len();
+                self.data.push(consts::TAG_LIST_EXT);
+                self.data.push_u32(length_u32(count)?);
+                return Ok(self.open(term, Children::List(list.clone()), count, After::Nil));
             }
             "tuple" => {
-                let as_tup = term.cast::<PyTuple>()?;
-                self.write_tuple(as_tup)
+                let tuple = term.cast::<PyTuple>()?;
+                let count = tuple.len();
+                if let Ok(small) = u8::try_from(count) {
+                    self.data.push(consts::TAG_SMALL_TUPLE_EXT);
+                    self.data.push(small);
+                } else {
+                    self.data.push(consts::TAG_LARGE_TUPLE_EXT);
+                    self.data.push_u32(length_u32(count)?);
+                }
+                return Ok(self.open(term, Children::Tuple(tuple.clone()), count, After::Nothing));
             }
             "dict" => {
-                let as_dict = term.cast::<PyDict>()?;
-                self.write_dict(as_dict)
+                // `items()` is a snapshot list, so a hook that changes the
+                // dict while it is encoded cannot break the iteration.
+                let items = term.cast::<PyDict>()?.items();
+                let pairs = items.len();
+                self.data.push(consts::TAG_MAP_EXT);
+                self.data.push_u32(length_u32(pairs)?);
+                let count = pairs
+                    .checked_mul(2)
+                    .ok_or(CodecError::TooLong { size: pairs })?;
+                return Ok(self.open(term, Children::Pairs(items), count, After::Nothing));
             }
-            "Atom" => self.write_atom(term),
-            "StrictAtom" => self.write_atom(term),
+            "Atom" => self.write_atom(term)?,
+            "StrictAtom" => self.write_atom(term)?,
             "str" => {
                 let as_str = term.cast::<PyString>()?;
-                self.write_str(as_str)
+                self.write_str(as_str)?
             }
             "bool" => {
                 let val: bool = term.extract()?;
@@ -105,51 +254,65 @@ impl<'py> Encoder<'py> {
                     Cow::from("true")
                 } else {
                     Cow::from("false")
-                })
+                })?
             }
-            "NoneType" => self.write_atom_from_cow(Cow::from("undefined")),
+            "NoneType" => self.write_atom_from_cow(Cow::from("undefined"))?,
             "ImproperList" => {
-                let elements0 = term.getattr("_elements")?;
-                let elements = elements0.cast::<PyList>()?;
+                let elements = term.getattr("_elements")?.cast_into::<PyList>()?;
                 let tail = term.getattr("_tail")?;
-                // `[... | T]` with no elements is `T` itself
-                if !elements.is_empty() {
-                    self.write_list_no_tail(elements)?;
+                if elements.is_empty() {
+                    // `[... | T]` with no elements is `T` itself
+                    return Ok(Step::Substitute(tail));
                 }
-                self.encode(&tail)
+                let count = elements.len();
+                self.data.push(consts::TAG_LIST_EXT);
+                self.data.push_u32(length_u32(count)?);
+                return Ok(self.open(term, Children::List(elements), count, After::Tail(tail)));
             }
-            "Pid" => self.write_pid(term),
-            "Reference" => self.write_ref(term),
+            "Pid" => self.write_pid(term)?,
+            "Reference" => self.write_ref(term)?,
             "bytes" => {
                 let py_bytes = term.cast::<PyBytes>()?;
-                self.write_binary(py_bytes)
+                self.write_binary(py_bytes)?
             }
-            "BitString" => self.write_bitstring(term),
-            _other => self.write_unknown_object(term),
+            "BitString" => self.write_bitstring(term)?,
+            _other => return Ok(Step::Substitute(self.substitute(term)?)),
         }
+        Ok(Step::Done)
     }
 
-    /// For unknown object, check whether catch_all is set, encode what it returns.
-    /// If no catch_all was set, check whether object has ``__etf__(self)`` member.
-    /// Else encode object as Tuple(b'ClassName', Dict(b'field', values)) trying
-    ///   to avoid circular loops.
-    fn write_unknown_object(&mut self, py_term: &Bound<'py, PyAny>) -> CodecResult<()> {
-        match &self.catch_all {
-            Some(h1) => {
-                let repr1 = h1.call1((py_term,))?;
-                self.encode(&repr1)
-            }
-            None => match py_term.getattr("__etf__") {
-                Ok(h2) => {
-                    let repr2 = h2.call0()?;
-                    self.encode(&repr2)
-                }
-                Err(_) => self.write_generic_unknown_object(py_term),
-            },
+    /// A frame for a compound value whose header is written; a value with no
+    /// children is finished already.
+    fn open(
+        &self,
+        container: &Bound<'py, PyAny>,
+        children: Children<'py>,
+        count: usize,
+        after: After<'py>,
+    ) -> Step<'py> {
+        if count == 0 {
+            return Step::Done;
         }
+        Step::Open(Frame {
+            container: container.clone(),
+            children,
+            count,
+            next: 0,
+            after,
+        })
     }
 
-    fn write_generic_unknown_object(&mut self, py_term: &Bound<'py, PyAny>) -> CodecResult<()> {
+    /// The value that stands for an object with no encoding of its own: what
+    /// the "catch_all" hook or the object's ``__etf__()`` returns, else
+    /// the `(b'ClassName', {b'field': value})` tuple of
+    /// `py_codec_impl.generic_serialize_object`.
+    fn substitute(&mut self, py_term: &Bound<'py, PyAny>) -> CodecResult<Bound<'py, PyAny>> {
+        if let Some(h1) = &self.catch_all {
+            return Ok(h1.call1((py_term,))?);
+        }
+        if let Ok(h2) = py_term.getattr("__etf__") {
+            return Ok(h2.call0()?);
+        }
         let py_fn = match &self.cached_generic_serialize_fn {
             Some(a) => a.clone(),
             None => {
@@ -161,60 +324,7 @@ impl<'py> Encoder<'py> {
         };
         let result_pair = py_fn.call1((py_term, self.py.None()))?;
         let py_pair = result_pair.cast::<PyTuple>()?;
-        let result = py_pair.get_item(0)?;
-        self.encode(&result)
-    }
-
-    /// Writes list tag with elements, but no tail element (NIL or other). Ensure
-    /// that the calling code is writing either a NIL or a tail term.
-    #[inline]
-    fn write_list_no_tail(&mut self, list: &Bound<'py, PyList>) -> CodecResult<()> {
-        let size = list.len();
-        self.data.push(consts::TAG_LIST_EXT);
-        self.data
-            .push_u32(u32::try_from(size).map_err(|_| CodecError::TooLong { size })?);
-        for i in 0..size {
-            let item = list.get_item(i)?;
-            self.encode(&item)?;
-        }
-        Ok(())
-    }
-
-    /// Writes a tuple: SMALL_TUPLE_EXT up to 255 elements, else LARGE_TUPLE_EXT.
-    #[inline]
-    fn write_tuple(&mut self, tup: &Bound<'py, PyTuple>) -> CodecResult<()> {
-        let size = tup.len();
-        if let Ok(small) = u8::try_from(size) {
-            self.data.push(consts::TAG_SMALL_TUPLE_EXT);
-            self.data.push(small);
-        } else {
-            self.data.push(consts::TAG_LARGE_TUPLE_EXT);
-            self.data
-                .push_u32(u32::try_from(size).map_err(|_| CodecError::TooLong { size })?);
-        }
-
-        for i in 0..size {
-            let item = tup.get_item(i)?;
-            self.encode(&item)?;
-        }
-        Ok(())
-    }
-
-    /// Writes Erlang map from Python dict.
-    #[inline]
-    fn write_dict(&mut self, py_dict: &Bound<'py, PyDict>) -> CodecResult<()> {
-        // `items()` is a snapshot list, so a hook that changes the dict while
-        // it is encoded cannot break the iteration.
-        let items = py_dict.items();
-        self.data.push(consts::TAG_MAP_EXT);
-        self.data.push_u32(items.len() as u32);
-
-        for item in items.iter() {
-            let (py_key, py_value): (Bound<'py, PyAny>, Bound<'py, PyAny>) = item.extract()?;
-            self.encode(&py_key)?;
-            self.encode(&py_value)?;
-        }
-        Ok(())
+        Ok(py_pair.get_item(0)?)
     }
 
     /// Writes an integer: SMALL_INTEGER_EXT for 0..255, INTEGER_EXT for a

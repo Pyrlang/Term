@@ -16,8 +16,10 @@
 used by the network distribution layer.
 """
 
+import itertools
 import math
 import struct
+from collections.abc import Iterator
 from typing import Any, Callable, NoReturn, Optional, Union
 from zlib import decompressobj
 from zlib import error as zlib_error
@@ -654,45 +656,6 @@ def _start_term(dec: _Decoder, reader: _Reader) -> Any:
     raise PyCodecError("Unknown tag %d" % tag)
 
 
-def _pack_list(lst: list[Any], encode_hook: EncodeHookType) -> bytes:
-    """A proper list; ``[]`` is ``NIL_EXT`` alone, as OTP writes it."""
-    if not lst:
-        return bytes([TAG_NIL_EXT])
-    data = b"".join(term_to_binary_2(item, encode_hook) for item in lst)
-    return bytes([TAG_LIST_EXT]) + util.to_u32(len(lst)) + data + bytes([TAG_NIL_EXT])
-
-
-def _pack_improper_list(
-    lst: list[Any], tail: Any, encode_hook: EncodeHookType
-) -> bytes:
-    """``[lst... | tail]``; with no elements that is ``tail`` itself."""
-    if not lst:
-        return term_to_binary_2(tail, encode_hook)
-    data = b"".join(term_to_binary_2(item, encode_hook) for item in lst)
-    data += term_to_binary_2(tail, encode_hook)
-    return bytes([TAG_LIST_EXT]) + util.to_u32(len(lst)) + data
-
-
-def _pack_tuple(val: tuple[Any, ...], encode_hook: EncodeHookType) -> bytes:
-    if len(val) < 256:
-        data = bytes([TAG_SMALL_TUPLE_EXT, len(val)])
-    else:
-        data = bytes([TAG_LARGE_TUPLE_EXT]) + util.to_u32(len(val))
-
-    for item in val:
-        data += term_to_binary_2(item, encode_hook)
-
-    return data
-
-
-def _pack_dict(val: dict[Any, Any], encode_hook: EncodeHookType) -> bytes:
-    data = bytes([TAG_MAP_EXT]) + util.to_u32(len(val))
-    for k in val.keys():
-        data += term_to_binary_2(k, encode_hook)
-        data += term_to_binary_2(val[k], encode_hook)
-    return data
-
-
 # Range of INTEGER_EXT: a signed 32-bit integer.
 _INT_MIN = -(2**31)
 _INT_MAX = 2**31 - 1
@@ -861,20 +824,47 @@ def _pack_binary(data: bytes, last_byte_bits: int) -> bytes:
     )
 
 
-def term_to_binary_2(val: Any, encode_hook: EncodeHookType) -> bytes:
-    """Erlang lists are decoded into term.List object, whose ``elements_``
-    field contains the data, ``tail_`` field has the optional tail and a
-    helper function exists to assist with extracting an unicode string.
+# A compound value whose children are being encoded (see _encode): the
+# container (kept alive, and its id marks it open), the children still to
+# come, and whether NIL_EXT follows them (a proper list).
+_EncFrame = tuple[object, Iterator[Any], bool]
 
-    :param encode_hook: None or a dict with key value pairs (t,v) where t
-        is a python type (as string, i.e. 'int' not int) and v a callable
-        operating on an object of type t.
-        Additionally, t may be 'catch_all' and v a callback which returns a
-        representation for unknown object types.
-    :param val: Almost any Python value
-    :return: bytes object with encoded data, but without a 131 header byte.
-        None will be encoded as such and becomes Atom('undefined').
-    """
+
+def _substitute(val: Any, encode_hook: EncodeHookType) -> Any:
+    """The value that stands for ``val``, which has no encoding of its own:
+    what the "catch_all" hook or the ``__etf__`` method returns, else the
+    ``(ClassName, Fields)`` tuple of ``generic_serialize_object``."""
+    catch_all = None
+    if encode_hook is not None:
+        catch_all = encode_hook.get("catch_all", None)
+    if catch_all is not None:
+        return catch_all(val)
+    etf = getattr(val, "__etf__", None)
+    if etf is not None:
+        return etf()
+    try:
+        ser, _ = generic_serialize_object(val)
+    except RecursionError as e:
+        raise PyCodecError(
+            "Object %s nests too deeply to serialize" % type(val).__name__
+        ) from e
+    return ser
+
+
+# Returned by _start_value: encode `value_` in place of the value given.
+class _Substitute:
+    __slots__ = ("value_",)
+
+    def __init__(self, value: Any) -> None:
+        self.value_ = value
+
+
+def _start_value(
+    val: Any, encode_hook: EncodeHookType, out: bytearray
+) -> Union[None, _EncFrame, _Substitute]:
+    """Write ``val`` to ``out``; or write the header of a compound value
+    and return its frame, as its children follow; or return the value to
+    encode in its place."""
     type_name_ref = type(val).__name__
     if encode_hook is not None and type_name_ref in encode_hook:
         hook_fn = encode_hook.get(type_name_ref)
@@ -887,81 +877,159 @@ def term_to_binary_2(val: Any, encode_hook: EncodeHookType) -> bytes:
 
     type_val = type(val)
     if type_val == int:
-        return _pack_int(val)
-
+        out += _pack_int(val)
     elif type_val == float:
-        return _pack_float(val)
-
+        out += _pack_float(val)
     elif type_val == str:
-        return _pack_str(val)
-
+        out += _pack_str(val)
     elif type_val == bool:
-        return _pack_atom("true") if val else _pack_atom("false")
-
+        out += _pack_atom("true") if val else _pack_atom("false")
     elif type_val == list:
-        return _pack_list(val, encode_hook)
-
+        if not val:
+            out.append(TAG_NIL_EXT)  # `[]` is NIL_EXT alone, as OTP writes it
+            return None
+        out.append(TAG_LIST_EXT)
+        out += util.to_u32(len(val))
+        return (val, iter(val), True)
     elif type_val == tuple:
-        return _pack_tuple(val, encode_hook)
-
-    elif type_val == dict:
-        return _pack_dict(val, encode_hook)
-
-    elif val is None:
-        return _pack_atom("undefined")
-
-    elif isinstance(val, Atom):
-        return _pack_atom(val)
-
-    elif isinstance(val, ImproperList):
-        return _pack_improper_list(val._elements, val._tail, encode_hook)
-
-    elif isinstance(val, Pid):
-        return _pack_pid(val)
-
-    elif isinstance(val, Reference):
-        return _pack_ref(val)
-
-    elif type_val == bytes:
-        return _pack_binary(val, 8)
-
-    elif isinstance(val, BitString):
-        return _pack_binary(val.value_, val.last_byte_bits_)
-
-    # Check if options had encode_hook which is not None.
-    # Otherwise check if value class has a __etf__ member which is used instead.
-    # Otherwise encode as a tuple (Atom('ClassName), dir(value))
-    catch_all = None
-    if encode_hook is not None:
-        catch_all = encode_hook.get("catch_all", None)
-    if catch_all is None:
-        catch_all = getattr(val, "__etf__", None)
-        if catch_all is None:
-            ser, _ = generic_serialize_object(val)
-            return term_to_binary_2(ser, encode_hook)
+        if len(val) < 256:
+            out += bytes([TAG_SMALL_TUPLE_EXT, len(val)])
         else:
-            return term_to_binary_2(catch_all(), encode_hook)
+            out.append(TAG_LARGE_TUPLE_EXT)
+            out += util.to_u32(len(val))
+        return (val, iter(val), False) if val else None
+    elif type_val == dict:
+        out.append(TAG_MAP_EXT)
+        out += util.to_u32(len(val))
+        if not val:
+            return None
+        # A snapshot of the pairs: a hook that changes the dict while it is
+        # encoded cannot break the iteration (as in the native codec).
+        pairs = list(val.items())
+        return (val, (x for pair in pairs for x in pair), False)
+    elif val is None:
+        out += _pack_atom("undefined")
+    elif isinstance(val, Atom):
+        out += _pack_atom(val)
+    elif isinstance(val, ImproperList):
+        if not val._elements:
+            # `[... | T]` with no elements is `T` itself
+            return _Substitute(val._tail)
+        out.append(TAG_LIST_EXT)
+        out += util.to_u32(len(val._elements))
+        return (val, itertools.chain(val._elements, (val._tail,)), False)
+    elif isinstance(val, Pid):
+        out += _pack_pid(val)
+    elif isinstance(val, Reference):
+        out += _pack_ref(val)
+    elif type_val == bytes:
+        out += _pack_binary(val, 8)
+    elif isinstance(val, BitString):
+        out += _pack_binary(val.value_, val.last_byte_bits_)
     else:
-        return term_to_binary_2(catch_all(val), encode_hook)
+        return _Substitute(_substitute(val, encode_hook))
+    return None
+
+
+# Returned by next() when a frame has no children left.
+_DONE: Any = object()
+
+
+def _encode(
+    val: Any, encode_hook: EncodeHookType, max_depth: int, out: bytearray
+) -> None:
+    """Append the encoding of ``val`` to ``out``.
+
+    Iterative: compound values wait on an explicit stack, at most
+    ``max_depth`` of them, so neither Python's recursion limit nor the C
+    stack bounds the nesting (as the decoders). A value that contains itself
+    raises PyCodecError, and so does a chain of more than ``max_depth``
+    substitutions (hooks that keep returning values with no encoding).
+    """
+    stack: list[_EncFrame] = []
+    open_ids: set[int] = set()
+    substitutions = 0
+    while True:
+        frame = _start_value(val, encode_hook, out)
+        if isinstance(frame, _Substitute):
+            substitutions += 1
+            if substitutions > max_depth:
+                raise PyCodecError(
+                    "Value is substituted more than max_depth %d times" % max_depth
+                )
+            val = frame.value_
+            continue
+        substitutions = 0
+        if frame is not None:
+            if len(stack) >= max_depth:
+                raise PyCodecError(
+                    "Term is nested deeper than max_depth %d" % max_depth
+                )
+            key = id(frame[0])
+            if key in open_ids:
+                raise PyCodecError(
+                    "Value contains itself (a %s)" % type(frame[0]).__name__
+                )
+            open_ids.add(key)
+            stack.append(frame)
+        # The next child of the innermost open value; close finished ones.
+        while stack:
+            container, children, nil = stack[-1]
+            val = next(children, _DONE)
+            if val is not _DONE:
+                break
+            if nil:
+                out.append(TAG_NIL_EXT)
+            stack.pop()
+            open_ids.discard(id(container))
+        else:
+            return
+
+
+def term_to_binary_2(
+    val: Any, encode_hook: EncodeHookType, max_depth: int = DEFAULT_MAX_DEPTH
+) -> bytes:
+    """Encode a value without the 131 header byte.
+
+    :param encode_hook: None or a dict with key value pairs (t,v) where t
+        is a python type (as string, i.e. 'int' not int) and v a callable
+        operating on an object of type t.
+        Additionally, t may be 'catch_all' and v a callback which returns a
+        representation for unknown object types.
+    :param val: Almost any Python value
+    :param max_depth: how deeply compound values may nest
+    :return: bytes object with encoded data, but without a 131 header byte.
+        None will be encoded as such and becomes Atom('undefined').
+    :raises PyCodecError: for a value nested deeper than ``max_depth``, a
+        value that contains itself, and a value with no encoding
+    """
+    out = bytearray()
+    _encode(val, encode_hook, max_depth, out)
+    return bytes(out)
 
 
 def term_to_binary(val: Any, opt: OptionsType = None) -> bytes:
     """Prepend the 131 header byte to encoded data.
     :param val the value to encode
-    :param opt:
-        None or a dict with key value pairs (t,v) where t
-        is a python type (as string, i.e. 'int' not int) and v a callable
-        operating on an object of type t.
-        Additionally, t may be 'catch_all' and v a callback which returns a
-        representation for unknown object types.
+    :param opt: None or a dict of options:
+        * "encode_hook": None or a dict with key value pairs (t,v) where t
+          is a python type (as string, i.e. 'int' not int) and v a callable
+          operating on an object of type t.
+          Additionally, t may be 'catch_all' and v a callback which returns a
+          representation for unknown object types.
+        * "max_depth": how deeply compound values may nest (default 4096,
+          as for decoding)
     :return:
         None will be encoded as such and becomes Atom('undefined').
+    :raises PyCodecError: as :py:func:`term_to_binary_2`
     """
     if opt is None:
         opt = {}
     encode_hook = opt.get("encode_hook", None)
-
-    return bytes([ETF_VERSION_TAG]) + term_to_binary_2(val, encode_hook)
+    max_depth = _positive_int_option(opt, "max_depth", DEFAULT_MAX_DEPTH)
+    out = bytearray([ETF_VERSION_TAG])
+    _encode(val, encode_hook, max_depth, out)
+    return bytes(out)
 
 
 __all__ = [

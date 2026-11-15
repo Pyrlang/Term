@@ -1,21 +1,32 @@
-"""Resource limits of the decoders (plan step TERM-09).
+"""Resource limits of the decoders (plan step TERM-09) and the encoders
+(TERM-22).
 
 Valid terms that are too deep or too big to decode safely fail fast with
 ``PyCodecError``, the same way in both codecs. OTP itself would decode them;
 the limits are ours (options ``max_depth`` and ``max_size``). Malformed
 counts and compressed terms that OTP rejects too are in ``test_bad_terms.py``
-(``limits.*``).
+(``limits.*``). The encoders take the same ``max_depth`` option and refuse
+values that contain themselves.
 """
 
+import shutil
 import struct
+import subprocess
 import time
 import zlib
+from pathlib import Path
 from types import ModuleType
 from typing import Any
 
 import pytest
+from fixture_manifest import codec_id
 
+from term.list import ImproperList
 from term.py_codec_impl import DEFAULT_MAX_DEPTH, DEFAULT_MAX_SIZE
+
+# The Erlang runtime that judges the deep encoding; None skips that test.
+ERL = shutil.which("erl")
+CHECKER_SRC = Path(__file__).parent / "erl" / "check_roundtrip.erl"
 
 # Longest a rejected bomb may take to fail.
 FAST = 1.0
@@ -87,3 +98,117 @@ def test_max_size_option(codec: ModuleType) -> None:
 def test_bad_limit_options(codec: ModuleType, name: str, value: Any) -> None:
     with pytest.raises(codec.PyCodecError):
         codec.binary_to_term(bytes([131, 106]), {name: value})
+
+
+def _deep_value(depth: int) -> list[Any]:
+    """``[[...[]...]]`` as a Python value: ``depth`` non-empty lists."""
+    value: list[Any] = []
+    for _ in range(depth):
+        value = [value]
+    return value
+
+
+def test_encode_max_depth(codec: ModuleType) -> None:
+    """4096 nested lists encode (to the bytes the decoder tests use); one
+    more is refused, as by the decoders."""
+    data = codec.term_to_binary(_deep_value(DEFAULT_MAX_DEPTH), None)
+    assert data == _nested_list(DEFAULT_MAX_DEPTH)
+    with pytest.raises(codec.PyCodecError, match="max_depth"):
+        codec.term_to_binary(_deep_value(DEFAULT_MAX_DEPTH + 1), None)
+
+
+@pytest.mark.parametrize(
+    "wrap",
+    [
+        lambda v: [v],
+        lambda v: (v,),
+        lambda v: {1: v},
+        lambda v: ImproperList([1], v),
+    ],
+    ids=["list", "tuple", "map", "improper_list_tail"],
+)
+def test_encode_max_depth_option(codec: ModuleType, wrap: Any) -> None:
+    """Every open compound value counts: here 10 of a kind around 0."""
+    value = 0
+    for _ in range(10):
+        value = wrap(value)
+    codec.term_to_binary(value, {"max_depth": 10})
+    with pytest.raises(codec.PyCodecError, match="max_depth"):
+        codec.term_to_binary(value, {"max_depth": 9})
+
+
+def test_encode_deep_bomb(codec: ModuleType) -> None:
+    """100 000 nested lists fail fast instead of overflowing a stack."""
+    start = time.perf_counter()
+    with pytest.raises(codec.PyCodecError, match="max_depth"):
+        codec.term_to_binary(_deep_value(100_000), None)
+    assert time.perf_counter() - start < FAST
+
+
+def test_encode_self_containing(codec: ModuleType) -> None:
+    lst: list[Any] = [1]
+    lst.append(lst)
+    with pytest.raises(codec.PyCodecError, match="contains itself"):
+        codec.term_to_binary(lst, None)
+    dct: dict[Any, Any] = {}
+    dct[1] = [dct]
+    with pytest.raises(codec.PyCodecError, match="contains itself"):
+        codec.term_to_binary(dct, None)
+
+
+def test_encode_shared_is_not_a_cycle(codec: ModuleType) -> None:
+    """The same list twice side by side is not a cycle."""
+    shared = [1]
+    assert codec.term_to_binary([shared, shared], None) == codec.term_to_binary(
+        [[1], [1]], None
+    )
+
+
+class _Endless:
+    """Has no encoding; its ``__etf__`` returns another one of itself."""
+
+    def __etf__(self) -> "_Endless":
+        return _Endless()
+
+
+def test_encode_endless_substitution(codec: ModuleType) -> None:
+    """Hooks that never return an encodable value fail, not loop."""
+    with pytest.raises(codec.PyCodecError, match="max_depth"):
+        codec.term_to_binary(_Endless(), None)
+    hooks = {"catch_all": lambda v: v}
+    with pytest.raises(codec.PyCodecError, match="max_depth"):
+        codec.term_to_binary(object(), {"encode_hook": hooks})
+    # Hooks that nest the value deeper every time hit the depth limit.
+    with pytest.raises(codec.PyCodecError, match="max_depth"):
+        codec.term_to_binary(object(), {"encode_hook": {"catch_all": lambda v: [v]}})
+
+
+@pytest.mark.erlang
+@pytest.mark.skipif(ERL is None, reason="erl (Erlang/OTP) is not on PATH")
+def test_otp_decodes_deep_encoding(codec: ModuleType, tmp_path: Path) -> None:
+    """OTP writes its own 4096-deep list, and check_roundtrip.erl confirms
+    that ours decodes to the same term."""
+    assert ERL is not None
+    theirs = tmp_path / "otp"
+    ours = tmp_path / codec_id(codec)
+    beam = tmp_path / "beam"
+    for d in (theirs, ours, beam):
+        d.mkdir()
+    (ours / "deep.etf").write_bytes(
+        codec.term_to_binary(_deep_value(DEFAULT_MAX_DEPTH), None)
+    )
+    write_theirs = (
+        "T = lists:foldl(fun(_, A) -> [A] end, [], lists:seq(1, %d)), "
+        'ok = file:write_file("%s", term_to_binary(T)).'
+        % (DEFAULT_MAX_DEPTH, (theirs / "deep.etf").as_posix())
+    )
+    compile_expr = '{ok, _} = compile:file("%s", [{outdir, "%s"}, report]).' % (
+        CHECKER_SRC.as_posix(),
+        beam.as_posix(),
+    )
+    cmd = [ERL, "-noshell", "-pa", beam.as_posix(), "-eval", write_theirs]
+    cmd += ["-eval", compile_expr, "-run", "check_roundtrip", "main"]
+    cmd += [theirs.as_posix(), ours.as_posix()]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "checked\t%s\t1" % ours.as_posix() in proc.stdout

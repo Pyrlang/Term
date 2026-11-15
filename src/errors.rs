@@ -47,6 +47,12 @@ pub enum CodecError {
     // Nesting beyond option "max_depth".
     #[error("Term is nested deeper than max_depth {max_depth}")]
     TooDeep { max_depth: usize },
+    // A value to encode that contains itself.
+    #[error("Value contains itself (a {type_name})")]
+    Cyclic { type_name: String },
+    // Encode hooks that keep returning values with no encoding of their own.
+    #[error("Value is substituted more than max_depth {max_depth} times")]
+    TooManySubstitutions { max_depth: usize },
     // A fun frame finished without its four fixed parts (cannot happen:
     // the frame always expects at least four children).
     #[error("Fun is missing Module, OldIndex, OldUniq or Pid")]
