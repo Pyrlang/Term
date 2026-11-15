@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- New decode option `"atom_cache"`: a list or tuple of atom texts that
+  `ATOM_CACHE_REF` (tag 82) refers to, for terms that follow a distribution
+  header. Without the option tag 82 raises `PyCodecError`.
 - Decoding options (`atom`, `atom_call`, `byte_string`) and `decode_hook`
   apply to every nested term in both codecs. The Python codec used to apply
   them to the outermost term only. `atom_call` takes precedence over `atom`.

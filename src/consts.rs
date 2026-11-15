@@ -16,6 +16,7 @@
 
 pub const ETF_VERSION_TAG: u8 = 131;
 
+pub const TAG_ATOM_CACHE_REF: u8 = 82;
 pub const TAG_ATOM_EXT: u8 = 100;
 pub const TAG_ATOM_UTF8_EXT: u8 = 118;
 

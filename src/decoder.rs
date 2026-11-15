@@ -52,6 +52,9 @@ pub struct Decoder<'py> {
     pub decode_hook: Bound<'py, PyDict>,
     // The "atom_call" option: builds every atom from its text when set.
     atom_call: Option<Bound<'py, PyAny>>,
+    // The "atom_cache" option: the atom texts ATOM_CACHE_REF indexes, a
+    // list or tuple; entries are checked when used.
+    atom_cache: Option<Bound<'py, PyAny>>,
     cached_atom_pyclass: Option<Bound<'py, PyAny>>,
     // term.atom.Atom, for node names whatever the "atom" option says.
     cached_node_atom_pyclass: Option<Bound<'py, PyAny>>,
@@ -230,6 +233,15 @@ impl<'py> Decoder<'py> {
             }
             other => other,
         };
+        let atom_cache = match opts1.get_item("atom_cache")? {
+            Some(c) if c.is_none() => None,
+            Some(c) if !(c.is_instance_of::<PyList>() || c.is_instance_of::<PyTuple>()) => {
+                return Err(CodecError::BadOptions {
+                    txt: "'atom_cache' must be a list or tuple of str".to_string(),
+                })
+            }
+            other => other,
+        };
         let s8opt = helpers::get_byte_str_opt(&opts1)?;
         let bitstring_repr = helpers::get_bitstring_opt(&opts1)?;
         let max_depth = helpers::get_positive_int_opt(&opts1, "max_depth", DEFAULT_MAX_DEPTH)?;
@@ -257,6 +269,7 @@ impl<'py> Decoder<'py> {
             max_size,
             decode_hook,
             atom_call,
+            atom_cache,
             cached_atom_pyclass: None,
             cached_node_atom_pyclass: None,
             cached_pid_pyclass: None,
@@ -368,6 +381,10 @@ impl<'py> Decoder<'py> {
             consts::TAG_ATOM_UTF8_EXT => self.parse_utf8_atom::<u16>(reader),
             consts::TAG_SMALL_ATOM_EXT => self.parse_latin1_atom::<u8>(reader),
             consts::TAG_SMALL_ATOM_UTF8_EXT => self.parse_utf8_atom::<u8>(reader),
+            consts::TAG_ATOM_CACHE_REF => {
+                let txt = self.atom_cache_text(reader)?;
+                self.create_atom(&txt)
+            }
             consts::TAG_BINARY_EXT => self.parse_binary(reader),
             consts::TAG_BIT_BINARY_EXT => self.parse_bitstring(reader),
             consts::TAG_NIL_EXT => Ok(PyList::empty(self.py).into_any()),
@@ -759,6 +776,25 @@ impl<'py> Decoder<'py> {
         self.create_atom(&txt)
     }
 
+    /// The text an ATOM_CACHE_REF (its tag was read) stands for: entry
+    /// `AtomCacheReferenceIndex` of the "atom_cache" option.
+    fn atom_cache_text(&self, reader: &mut Reader) -> CodecResult<String> {
+        let index = usize::from(reader.read_u8()?);
+        let Some(cache) = &self.atom_cache else {
+            return Err(CodecError::NoAtomCache);
+        };
+        let len = cache.len()?;
+        if index >= len {
+            return Err(CodecError::AtomCacheIndex { index, len });
+        }
+        cache
+            .get_item(index)?
+            .extract::<String>()
+            .map_err(|_| CodecError::BadOptions {
+                txt: "'atom_cache' entries must be str".to_string(),
+            })
+    }
+
     #[inline]
     fn create_atom(&mut self, txt: &str) -> CodecResult<Bound<'py, PyAny>> {
         match txt {
@@ -874,6 +910,7 @@ impl<'py> Decoder<'py> {
             consts::TAG_ATOM_UTF8_EXT => read_utf8_text::<u16>(reader)?,
             consts::TAG_SMALL_ATOM_EXT => read_latin1_text::<u8>(reader)?,
             consts::TAG_SMALL_ATOM_UTF8_EXT => read_utf8_text::<u8>(reader)?,
+            consts::TAG_ATOM_CACHE_REF => Cow::Owned(self.atom_cache_text(reader)?),
             _ => return Err(CodecError::NotAnAtom { what, b: tag }),
         };
         let atom_cls = cached_class(

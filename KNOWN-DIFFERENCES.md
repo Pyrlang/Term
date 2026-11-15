@@ -22,9 +22,11 @@ when the difference is gone.
 - **`LOCAL_EXT` is never decoded.** OTP decodes it on the node that wrote
   it. Example: `term_to_binary({a,1}, [local])` → `PyCodecError` naming
   `LOCAL_EXT` (TERM-16).
-- **`ATOM_CACHE_REF` (82) is not decoded.** Example: `<<131,82,0>>` →
-  `PyCodecError` for an unknown tag. Needed only after a distribution header (TERM-18, waits
-  for PYRL-17).
+- **`ATOM_CACHE_REF` (82) is decoded wherever an atom may stand,** given
+  the decode option `atom_cache`. OTP accepts it only in terms that follow
+  a distribution header. Example: `binary_to_term(<<131,82,0>>,
+  {"atom_cache": ["a"]})` → `Atom("a")`; without the option →
+  `PyCodecError`, as OTP's `badarg` (TERM-18).
 - **Map keys Python cannot hash are rejected.** Example: `#{[a] => 1}` →
   `PyCodecError` ("Map key of type list is not hashable").
 - **Some values change type on the way through Python.** `true`, `false`,

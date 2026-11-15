@@ -1896,3 +1896,77 @@ def test_decode_special(codec: ModuleType) -> None:
     val3, tail3 = codec.binary_to_term(data3, None)
     assert val3 == None
     _assert_expected_tail(tail3)
+
+
+# From erl_ext_dist "Distribution Header for fragmented messages", the worked
+# example: the control message and the message that follow the header. The
+# header announces five atoms; indexes 0 and 1 are "already cached" there
+# (the node names of the two nodes), the texts for them are ours.
+ATOM_CACHE = ["a@host", "b@host", "reg", "call", "set_get_state"]
+ATOM_CACHE_CONTROL = bytes(
+    [104, 4, 97, 6, 103, 82, 0, 0, 0, 0, 85, 0, 0, 0, 0, 2, 82, 1, 82, 2]
+)
+ATOM_CACHE_MESSAGE = bytes(
+    [104, 3, 82, 3, 103, 82, 0, 0, 0, 0, 245, 0, 0, 0, 2, 2]
+    + [104, 2, 82, 4, 109, 0, 0, 0, 128]
+    + [0] * 128
+)
+
+
+def test_decode_atom_cache_refs(codec: ModuleType) -> None:
+    """ATOM_CACHE_REF resolves through the "atom_cache" option, as an atom
+    of its own and as the node name of a pid; no 131 byte (TERM-18)."""
+    options = {"atom_cache": ATOM_CACHE}
+    control, tail = codec.binary_to_term_2(
+        ATOM_CACHE_CONTROL + ATOM_CACHE_MESSAGE, dict(options)
+    )
+    assert control == (6, Pid("a@host", 85, 0, 2), Atom("b@host"), Atom("reg"))
+    assert type(control[1].node_name_) is Atom and type(control[3]) is Atom
+    assert tail == ATOM_CACHE_MESSAGE
+    message, tail = codec.binary_to_term_2(tail, dict(options))
+    assert message == (
+        Atom("call"),
+        Pid("a@host", 245, 2, 2),
+        (Atom("set_get_state"), bytes(128)),
+    )
+    assert tail == b""
+
+
+def test_decode_atom_cache_follows_atom_options(codec: ModuleType) -> None:
+    """A cached atom is an atom like any other: `true` becomes True, the
+    "atom" option applies, a tuple serves as the cache."""
+    cache = ("true", "héllo")
+    data = bytes([104, 2, 82, 0, 82, 1])
+    assert codec.binary_to_term_2(data, {"atom_cache": cache})[0] == (
+        True,
+        Atom("héllo"),
+    )
+    value, _ = codec.binary_to_term_2(data, {"atom_cache": cache, "atom": "str"})
+    assert value == (True, "héllo") and type(value[1]) is str
+
+
+@pytest.mark.parametrize(
+    "data, options",
+    [
+        pytest.param(bytes([82, 0]), None, id="no-option"),
+        pytest.param(bytes([82, 0]), {}, id="option-absent"),
+        pytest.param(bytes([82, 5]), {"atom_cache": ATOM_CACHE}, id="index-5-of-5"),
+        pytest.param(bytes([82, 255]), {"atom_cache": ATOM_CACHE}, id="index-255"),
+        pytest.param(bytes([82, 0]), {"atom_cache": []}, id="empty-cache"),
+        pytest.param(bytes([82]), {"atom_cache": ATOM_CACHE}, id="no-index"),
+        pytest.param(bytes([82, 0]), {"atom_cache": "abc"}, id="cache-is-str"),
+        pytest.param(bytes([82, 0]), {"atom_cache": [b"a"]}, id="entry-is-bytes"),
+        pytest.param(
+            bytes([103, 82, 9, 0, 0, 0, 1, 0, 0, 0, 0, 1]),
+            {"atom_cache": ATOM_CACHE},
+            id="pid-node-out-of-range",
+        ),
+    ],
+)
+def test_decode_atom_cache_ref_rejected(
+    codec: ModuleType, data: bytes, options: dict[str, Any] | None
+) -> None:
+    with pytest.raises(codec.PyCodecError):
+        codec.binary_to_term_2(data, options)
+    with pytest.raises(codec.PyCodecError):
+        codec.binary_to_term(b"\x83" + data, options)

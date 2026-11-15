@@ -131,6 +131,12 @@ pub enum CodecError {
     // An atom of more than 255 characters (decoding or encoding).
     #[error("Atom has {chars} characters, at most 255")]
     AtomTooLong { chars: usize },
+    // ATOM_CACHE_REF in a term decoded without the "atom_cache" option.
+    #[error("ATOM_CACHE_REF needs the 'atom_cache' option (terms after a distribution header)")]
+    NoAtomCache,
+    // ATOM_CACHE_REF whose index the "atom_cache" option does not have.
+    #[error("ATOM_CACHE_REF index {index} is outside the atom cache of {len} entries")]
+    AtomCacheIndex { index: usize, len: usize },
 }
 
 pub type CodecResult<T> = Result<T, CodecError>;

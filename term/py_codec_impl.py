@@ -20,7 +20,7 @@ import itertools
 import math
 import re
 import struct
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from typing import Any, Callable, NoReturn, Optional, Union
 from zlib import decompressobj
 from zlib import error as zlib_error
@@ -38,6 +38,7 @@ from term.reference import Reference
 
 ETF_VERSION_TAG = 131
 
+TAG_ATOM_CACHE_REF = 82
 TAG_ATOM_EXT = 100
 TAG_ATOM_UTF8_EXT = 118
 
@@ -179,11 +180,14 @@ _F64 = struct.Struct(">d")
 # checked against the bytes that remain, so malformed input raises
 # PyCodecError, never IndexError or struct.error.
 class _Reader:
-    __slots__ = ("data_", "pos_")
+    __slots__ = ("data_", "pos_", "atom_cache_")
 
     def __init__(self, data: bytes) -> None:
         self.data_ = data
         self.pos_ = 0
+        # The "atom_cache" option, set by _Decoder.decode: what
+        # ATOM_CACHE_REF indexes. Entries are checked when used.
+        self.atom_cache_: Optional[Sequence[Any]] = None
 
     def remaining(self) -> int:
         return len(self.data_) - self.pos_
@@ -257,13 +261,32 @@ def _atom_text(name: bytes, tag: int) -> str:
 
 
 def _read_atom_text(reader: _Reader, tag: int) -> str:
-    """The length and text of an atom whose tag was just read."""
+    """The length and text of an atom whose tag was just read, or for
+    ``ATOM_CACHE_REF`` the text its index stands for."""
+    if tag == TAG_ATOM_CACHE_REF:
+        index = reader.u8()
+        cache = reader.atom_cache_
+        if cache is None:
+            raise PyCodecError(
+                "ATOM_CACHE_REF needs the 'atom_cache' option (terms after a "
+                "distribution header)"
+            )
+        if index >= len(cache):
+            raise PyCodecError(
+                "ATOM_CACHE_REF index %d is outside the atom cache of %d entries"
+                % (index, len(cache))
+            )
+        text = cache[index]
+        if not isinstance(text, str):
+            raise PyCodecError("Option 'atom_cache' entries must be str")
+        return text
     size = reader.u16() if tag in (TAG_ATOM_EXT, TAG_ATOM_UTF8_EXT) else reader.u8()
     return _atom_text(reader.read(size), tag)
 
 
 # Tags that carry an atom.
 _ATOM_TAGS = (
+    TAG_ATOM_CACHE_REF,
     TAG_ATOM_EXT,
     TAG_ATOM_UTF8_EXT,
     TAG_SMALL_ATOM_EXT,
@@ -363,6 +386,10 @@ class _Decoder:
         self.bitstring_as_tuple_ = bitstring == "tuple"
         self.max_depth_ = _positive_int_option(options, "max_depth", DEFAULT_MAX_DEPTH)
         self.max_size_ = _positive_int_option(options, "max_size", DEFAULT_MAX_SIZE)
+        atom_cache = options.get("atom_cache")
+        if atom_cache is not None and not isinstance(atom_cache, (list, tuple)):
+            raise PyCodecError("Option 'atom_cache' must be a list or tuple of str")
+        self.atom_cache_: Optional[Sequence[Any]] = atom_cache
 
     def bitstring(self, value: bytes, bits: int) -> Any:
         """A bitstring as the options ask: ``(bytes, bits)`` or ``BitString``."""
@@ -403,6 +430,7 @@ class _Decoder:
         at most ``max_depth`` of them, so neither Python's recursion limit
         nor the C stack bounds the nesting (as in the native codec).
         """
+        reader.atom_cache_ = self.atom_cache_
         stack: list[_Frame] = []
         while True:
             value = _start_term(self, reader)
@@ -561,6 +589,10 @@ def binary_to_term_2(data: bytes, options: OptionsType = None) -> tuple[Term, by
               decoded value (nested ones too) whose type has that name.
               Options and hooks apply at every nesting level; node names of
               pids and references are always ``Atom``.
+            * "atom_cache": list or tuple of atom texts (str): what
+              ``ATOM_CACHE_REF`` (tag 82, ``AtomCacheReferenceIndex``) refers
+              to in terms that follow a distribution header. Without it
+              tag 82 is an error.
     :param data: Bytes containing encoded term without 131 header
     :rtype: Tuple[Value, Tail: bytes]
     :return: The function consumes as much data as
