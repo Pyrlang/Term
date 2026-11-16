@@ -40,7 +40,16 @@ requires-python = ">=3.11"
 [project.optional-dependencies]
 dev = [
     "black", "bumpver", "isort", "mypy", "pip-tools", "pytest", "setuptools-rust>=1.12",
-    "Jinja2>=2.10.1", "MarkupSafe>=1.0", "Pillow>=4.0.0", "Pygments>=2.2.0", "Sphinx>=1.6.2"
+]
+
+# Builds the documentation (docs-src/): `pip install -e . --group docs`.
+# A dependency group, not an extra: users of the package never install it.
+[dependency-groups]
+docs = [
+    "sphinx==9.2.0",
+    "furo==2025.12.19",
+    "myst-parser==5.2.0",
+    "sphinx-copybutton==0.5.2",
 ]
 
 [project.urls]
@@ -76,11 +85,9 @@ markers = [
 [tool.black]
 # Matches requires-python (decision 2 in .agents/00-plan.md).
 target-version = ["py311"]
-extend-exclude = "^/docs/"
 
 [tool.isort]
 profile = "black"
-extend_skip = ["docs"]
 
 [tool.mypy]
 python_version = "3.11"

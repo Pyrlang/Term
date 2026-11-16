@@ -23,11 +23,7 @@ fixtures:
 
 .PHONY: docs
 docs:
-	rm -rf $(ROOT)/docs; \
-	cd docs-src && \
-	$(MAKE) html && \
-	mv -f $(ROOT)/docs-src/build/html $(ROOT)/docs && \
-	touch $(ROOT)/docs/.nojekyll
+	$(PY) -m sphinx -W --keep-going -b html docs-src/source docs-src/build/html
 
 #
 # Installing for development, and for release

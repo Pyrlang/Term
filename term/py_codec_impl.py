@@ -101,11 +101,10 @@ EncodeHookType = Optional[dict[str, Callable[[Any], Any]]]
 OptionsType = Optional[dict[str, Any]]
 
 
-# This is Python variant of codec exception when Python impl is used.
-# Otherwise native lib defines its own exception with same name.
-# To use this, import via codec.py
+# The native codec defines an exception of the same name; user code
+# takes whichever is in use from term.codec.
 class PyCodecError(Exception):
-    pass
+    """A term could not be decoded or a value could not be encoded."""
 
 
 def incomplete_data(where: str = "") -> NoReturn:
@@ -557,49 +556,13 @@ def _start_fun(reader: _Reader) -> Any:
 
 
 def binary_to_term_2(data: bytes, options: OptionsType = None) -> tuple[Term, bytes]:
-    """Proceed decoding after leading tag has been checked and removed.
+    """Decode one term that has no version byte 131.
 
-    Erlang lists are decoded into ``term.List`` object, whose ``elements_``
-    field contains the data, ``tail_`` field has the optional tail and a
-    helper function exists to assist with extracting an unicode string.
-
-    Atoms are decoded to :py:class:`~Term.atom.Atom` or optionally to bytes
-    or to strings. If `atom_call` is provided that will be called and the
-    returned value will be used as representation if atoms
-    Pids are decoded into :py:class:`~Term.pid.Pid`.
-    Refs decoded to and :py:class:`~Term.reference.Reference`.
-    Maps are decoded into Python ``dict``.
-    Binaries are decoded into ``bytes``
-    object and bitstrings into a pair of ``(bytes, last_byte_bits:int)``
-    or a ``BitString`` (option "bitstring").
-
-    :param options: dict(str, _);
-            * "atom": "str" | "bytes" | "Atom" | "StrictAtom"; default "Atom".
-              Returns atoms as strings, as bytes or as atom.Atom class objects
-            * "atom_call": callable object that will get str as input the
-              returned value will be used as atom representation; takes
-              precedence over "atom"
-            * "byte_string": "str" | "bytes" | "int_list" (default "str").
-              Returns 8-bit strings as Python str or bytes or int list.
-            * "bitstring": "tuple" | "BitString" (default "tuple"). Returns
-              bitstrings as ``(bytes, last_byte_bits)`` or as
-              :py:class:`~term.bitstring.BitString`, which encodes back to a
-              bitstring.
-            * "decode_hook": dict of type name -> callable, called for every
-              decoded value (nested ones too) whose type has that name.
-              Options and hooks apply at every nesting level; node names of
-              pids and references are always ``Atom``.
-            * "atom_cache": list or tuple of atom texts (str): what
-              ``ATOM_CACHE_REF`` (tag 82, ``AtomCacheReferenceIndex``) refers
-              to in terms that follow a distribution header. Without it
-              tag 82 is an error.
-    :param data: Bytes containing encoded term without 131 header
-    :rtype: Tuple[Value, Tail: bytes]
-    :return: The function consumes as much data as
-        possible and returns the tail. Tail can be used again to parse
-        another term if there was any.
-    :raises PyCodecError(str): on malformed input, and when an option
-        callable raises (the original exception is its ``__cause__``)
+    :param data: the encoded term; more bytes may follow it
+    :param options: the decode options described in :py:mod:`term.codec`
+    :raises PyCodecError: on malformed input, and when an option callable
+        raises (the original exception is its ``__cause__``)
+    :returns: the value, and the bytes that follow the term
     """
     dec = _Decoder(options)
     reader = _Reader(data)
@@ -1024,12 +987,13 @@ def _is_a_simple_object(obj: object) -> bool:
 def generic_serialize_object(
     obj: Any, cycle_detect: Optional[set[int]] = None
 ) -> tuple[Optional[tuple[bytes, dict[bytes, Any]]], set[int]]:
-    """Given an arbitraty Python object creates a tuple (ClassName, {Fields}).
-    A fair effort is made to avoid infinite recursion on cyclic objects.
-    :param obj: Arbitrary object to encode
-    :param cycle_detect: A set with ids of object, for cycle detection
-    :return: A pair of result: (ClassName :: bytes(), Fields :: {bytes(), _})
-        or None, and a CycleDetect value
+    """The stand-in for an object that has no encoding of its own: the
+    tuple ``(ClassName, Fields)`` of its class name and public attributes.
+
+    :param obj: the object to describe
+    :param cycle_detect: ids of the objects already visited
+    :return: the tuple, or ``None`` for an object met a second time; and
+        the set of visited ids
     """
     if cycle_detect is None:
         cycle_detect = set()
@@ -1356,15 +1320,11 @@ def term_to_binary_2(
 ) -> bytes:
     """Encode a value without the 131 header byte.
 
-    :param encode_hook: None or a dict with key value pairs (t,v) where t
-        is a python type (as string, i.e. 'int' not int) and v a callable
-        operating on an object of type t.
-        Additionally, t may be 'catch_all' and v a callback which returns a
-        representation for unknown object types.
-    :param val: Almost any Python value
+    :param val: the value to encode
+    :param encode_hook: the ``"encode_hook"`` dict described in
+        :py:mod:`term.codec`, or ``None``
     :param max_depth: how deeply compound values may nest
-    :return: bytes object with encoded data, but without a 131 header byte.
-        None will be encoded as such and becomes Atom('undefined').
+    :return: the encoded term
     :raises PyCodecError: for a value nested deeper than ``max_depth``, a
         value that contains itself, and a value with no encoding
     """
@@ -1374,19 +1334,12 @@ def term_to_binary_2(
 
 
 def term_to_binary(val: Any, opt: OptionsType = None) -> bytes:
-    """Prepend the 131 header byte to encoded data.
-    :param val the value to encode
-    :param opt: None or a dict of options:
-        * "encode_hook": None or a dict with key value pairs (t,v) where t
-          is a python type (as string, i.e. 'int' not int) and v a callable
-          operating on an object of type t.
-          Additionally, t may be 'catch_all' and v a callback which returns a
-          representation for unknown object types.
-        * "max_depth": how deeply compound values may nest (default 4096,
-          as for decoding)
-    :return:
-        None will be encoded as such and becomes Atom('undefined').
+    """Encode a value, starting with the version byte 131.
+
+    :param val: the value to encode
+    :param opt: the encode options described in :py:mod:`term.codec`
     :raises PyCodecError: as :py:func:`term_to_binary_2`
+    :return: the encoded term
     """
     if opt is None:
         opt = {}

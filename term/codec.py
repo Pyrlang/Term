@@ -1,6 +1,57 @@
-"""Adapter module which attempts to import native (Rust) codec implementation
-and then if import fails, uses Python codec implementation which is slower
-but always works.
+"""The codec: Erlang External Term Format to Python values and back.
+
+This module is the public interface. It uses the native (Rust) codec when
+the extension module was built, and the Python codec
+(:py:mod:`term.py_codec_impl`) otherwise; both give the same results.
+
+Decode options
+--------------
+
+``binary_to_term`` and ``binary_to_term_2`` take a dict of options. They
+apply at every nesting level of the term.
+
+``"atom"``
+    ``"Atom"`` (default), ``"StrictAtom"``, ``"str"`` or ``"bytes"``: what
+    an Erlang atom becomes. ``true``, ``false`` and ``undefined`` always
+    become ``True``, ``False`` and ``None``.
+``"atom_call"``
+    A callable that gets the atom's text and returns the value to use for
+    it. Takes precedence over ``"atom"``.
+``"byte_string"``
+    ``"str"`` (default), ``"bytes"`` or ``"int_list"``: what a list of bytes
+    that Erlang sent as ``STRING_EXT`` becomes.
+``"bitstring"``
+    ``"tuple"`` (default): a bitstring becomes ``(bytes, last_byte_bits)``.
+    ``"BitString"``: it becomes a :py:class:`~term.bitstring.BitString`,
+    which encodes back to the same bitstring.
+``"decode_hook"``
+    A dict of type name to callable. Every decoded value whose type has
+    that name is replaced by what the callable returns for it.
+``"atom_cache"``
+    A list or tuple of atom texts that ``ATOM_CACHE_REF`` refers to, for
+    terms that follow a distribution header. Without it such a reference is
+    an error.
+``"max_depth"``
+    How deeply compound terms may nest (default 4096).
+``"max_size"``
+    The largest size in bytes a compressed term may declare (default
+    256 MiB).
+
+Encode options
+--------------
+
+``"encode_hook"``
+    A dict of type name (``"int"``, not ``int``) to callable; a value of
+    that type is replaced by what the callable returns before it is
+    encoded. The key ``"catch_all"`` is used for values that have no
+    encoding of their own. A single callable instead of a dict means
+    ``{"catch_all": callable}``.
+``"max_depth"``
+    How deeply compound values may nest (default 4096).
+
+A value with no encoding of its own and no ``"catch_all"`` hook is encoded
+as what its ``__etf__()`` method returns, or else as the tuple
+``(ClassName, Fields)`` of its public attributes.
 """
 
 import logging
@@ -31,24 +82,16 @@ _Hooks = Optional[dict[str, Callable[[Any], Any]]]
 def binary_to_term(
     data: bytes, options: _Options = None, decode_hook: _Hooks = None
 ) -> tuple[Term, bytes]:
-    """
-    Strip 131 header and unpack if the data was compressed.
+    """Decode one term that starts with the version byte 131; a compressed
+    term is inflated.
 
-    :param data: The incoming encoded data with the 131 byte
-    :param options: None or Options dict (pending design)
-                    * "atom": "str" | "bytes" | "Atom" (default "Atom").
-                      Returns atoms as strings, as bytes or as atom.Atom objects.
-                    * "atom_call": callabe object that returns the atom representation
-                    * "byte_string": "str" | "bytes" | "int_list" (default "str").
-                      Returns 8-bit strings as Python str, bytes or list of integers.
-    :param decode_hook:
-                Key/value pairs t: str,f : callable, s.t. f(v) is run before encoding
-                for values v of type t. This allows for overriding the built-in encoding.
-                "catch_all": f is a callable which will return representation for unknown
-                object types.
-    :raises PyCodecError: when the tag is not 131, when compressed
-                          data is incomplete or corrupted
-    :returns: Value and Remaining unconsumed bytes
+    :param data: the encoded term; more bytes may follow it
+    :param options: the decode options listed in the module description
+    :param decode_hook: the ``"decode_hook"`` option, given separately
+    :raises PyCodecError: when the first byte is not 131, on any malformed
+        or truncated input, when a limit is exceeded, and when a hook or
+        ``"atom_call"`` raises (the original exception is the ``__cause__``)
+    :returns: the value, and the bytes that follow the term
     """
     opt = options if options else {}
     if decode_hook:
@@ -59,19 +102,17 @@ def binary_to_term(
 def term_to_binary(
     term: object, options: _Options = None, encode_hook: _Hooks = None
 ) -> bytes:
-    """
-    Prepend the 131 header byte to encoded data.
-    :param options: None or a dict of options with key/values "encode_hook": f where f
-                is a callable which will return representation for unknown object types.
-                This is kept for backward compatibility, and is equivalent to
-                    encode_hook={"catch_all": f}
-                None will be encoded as such and becomes Atom('undefined').
-    :param encode_hook:
-                Key/value pairs t: str,f : callable, s.t. f(v) is run before rust encoding
-                for values of the type t. This allows for overriding the built-in encoding.
-                "catch_all": f is a callable which will return representation for unknown
-                object types.
-    :returns: Bytes, the term object encoded with erlang binary term format
+    """Encode a value, starting with the version byte 131.
+
+    ``None`` is encoded as the atom ``undefined``, ``True`` and ``False`` as
+    ``true`` and ``false``.
+
+    :param term: the value to encode
+    :param options: the encode options listed in the module description
+    :param encode_hook: the ``"encode_hook"`` option, given separately
+    :raises PyCodecError: for a value nested deeper than ``"max_depth"``, a
+        value that contains itself, and a value that cannot be encoded
+    :returns: the encoded term
     """
     opt = options if options else {}
     if options and hasattr(options.get("encode_hook", {}), "__call__"):
@@ -85,13 +126,15 @@ def term_to_binary(
 def binary_to_term_2(
     data: bytes, options: _Options = None, decode_hook: _Hooks = None
 ) -> tuple[Term, bytes]:
-    """Decode a term that has no 131 header byte, as the terms that follow a
-    distribution header; with the option ``"atom_cache"`` (a list of atom
+    """Decode a term that has no version byte 131, as the terms that follow
+    a distribution header; with the option ``"atom_cache"`` (a list of atom
     texts) ``ATOM_CACHE_REF`` refers to its entries.
 
+    :param data: the encoded term; more bytes may follow it
     :param options: as for :py:func:`binary_to_term`
-    :raises PyCodecError: on malformed input
-    :returns: Value and Remaining unconsumed bytes
+    :param decode_hook: as for :py:func:`binary_to_term`
+    :raises PyCodecError: as :py:func:`binary_to_term`
+    :returns: the value, and the bytes that follow the term
     """
     opt = options if options else {}
     if decode_hook:
@@ -102,8 +145,14 @@ def binary_to_term_2(
 def term_to_binary_2(
     term: object, options: _Options = None, encode_hook: _Hooks = None
 ) -> bytes:
-    """Encode a term without the 131 header byte; otherwise as
+    """Encode a value without the version byte 131; otherwise as
     :py:func:`term_to_binary`.
+
+    :param term: the value to encode
+    :param options: as for :py:func:`term_to_binary`
+    :param encode_hook: as for :py:func:`term_to_binary`
+    :raises PyCodecError: as :py:func:`term_to_binary`
+    :returns: the encoded term
     """
     # The two implementations take different arguments for their own
     # term_to_binary_2; dropping the header byte works with both.

@@ -7,7 +7,7 @@ Decoding
 =================== =================== ===================================
 Erlang              Python              Notes
 ------------------- ------------------- -----------------------------------
-atom()              Pyrlang.Atom        Can use ``str()`` or access :py:attr:`~term.atom.Atom.text_` directly
+atom()              Pyrlang.Atom        A ``str`` subclass
 float()             float               64-bit double precision floating point
 integer()           int                 Any size integers
 list()              list

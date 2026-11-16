@@ -24,3 +24,7 @@
 
 # Benchmark scratch: workloads, release build (test/bench/run.py)
 /test/bench/_work
+
+# Documentation build (python -m sphinx ... docs-src/build/html)
+/docs-src/build
+/docs-src/source/reference

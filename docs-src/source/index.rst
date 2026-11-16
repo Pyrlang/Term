@@ -29,11 +29,6 @@ Important APIs are:
     :caption: Contents
 
     data_types
-    term.atom
-    term.bitstring
-    term.erl_typing
-    term.fun
-    term.list
-    term.pid
-    term.py_codec_impl
-    term.reference
+    reference
+    known-differences
+    changelog
