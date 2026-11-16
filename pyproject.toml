@@ -70,6 +70,7 @@ term = ["py.typed", "*.pyi"]
 [tool.pytest.ini_options]
 markers = [
     "erlang: needs Erlang/OTP (erl on PATH); skipped when it is missing",
+    "bench: runs the codec benchmark at a tiny scale; only with -m bench",
 ]
 
 [tool.black]

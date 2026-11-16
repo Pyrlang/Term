@@ -48,3 +48,16 @@ def native_codec() -> ModuleType:
     if _NATIVE is None:
         pytest.skip(_NATIVE_SKIP_REASON)
     return _NATIVE
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    """Tests marked ``bench`` run only when the ``-m`` expression names
+    ``bench``; otherwise they are deselected, not skipped."""
+    if "bench" in (config.option.markexpr or ""):
+        return
+    bench = [item for item in items if item.get_closest_marker("bench")]
+    if bench:
+        config.hook.pytest_deselected(items=bench)
+        items[:] = [item for item in items if not item.get_closest_marker("bench")]

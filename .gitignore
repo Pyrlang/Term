@@ -21,3 +21,6 @@
 # Build outputs
 /dist
 *.pyd
+
+# Benchmark scratch: workloads, release build (test/bench/run.py)
+/test/bench/_work

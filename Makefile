@@ -45,3 +45,8 @@ check:
 	black --check . && isort --check . && mypy term \
 	&& cargo fmt --check && cargo clippy --all-targets -- -D warnings \
 	&& cargo test && $(PY) -m pytest test
+
+# The codec benchmark against OTP (release build; see test/bench/run.py).
+.PHONY: bench
+bench:
+	$(PY) test/bench/run.py
