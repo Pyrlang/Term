@@ -9,6 +9,12 @@
   quarters.
 - The native codec decodes and encodes `STRING_EXT` strings about ten
   times faster than before, and no longer slower than the Python codec.
+- The native encoder picks the encoding by the value's type, as the Python
+  codec does, not by the type's name: a user class named `Pid` or `int` is
+  an object with no encoding of its own (`catch_all`, `__etf__` or the
+  generic `(b'ClassName', {...})` form), and a subclass of `Pid`, `Atom`,
+  ... encodes as that term. Encoding is 2-4 times faster for pids,
+  references, integers and bignums.
 - Both decoders refuse a map whose keys are different in Erlang and equal
   in Python (`#{1 => a, 1.0 => b}`, `true` and `1`, `0.0` and `-0.0`, an
   atom and a string of the same text, tuples of these) with `PyCodecError`.

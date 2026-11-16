@@ -1032,6 +1032,36 @@ def test_encode_hook_member(codec: ModuleType) -> None:
     assert data2 == example2
 
 
+def test_encode_by_type_not_by_name(codec: ModuleType) -> None:
+    """A value is encoded by its type, not by its type's name: a user class
+    named like a term class or a builtin has no encoding of its own, and a
+    subclass of a term class encodes as that term. The native codec used to
+    go by the name (TERM-26)."""
+
+    class NamedPid:
+        def __etf__(self) -> Atom:
+            return Atom("not_a_pid")
+
+    class NamedInt(NamedPid):
+        pass
+
+    NamedPid.__name__ = "Pid"
+    NamedInt.__name__ = "int"
+
+    class SubPid(Pid):
+        pass
+
+    not_a_pid = bytes([131, 119, 9]) + b"not_a_pid"
+    assert codec.term_to_binary(NamedPid(), None) == not_a_pid
+    assert codec.term_to_binary(NamedInt(), None) == not_a_pid
+    # A pid of node 'a@b' (ID 1, Serial 2, Creation 3); OTP 29's
+    # term_to_binary(binary_to_term(B)) gives these bytes back unchanged.
+    pid_bytes = (
+        bytes([131, 88, 119, 3]) + b"a@b" + bytes([0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3])
+    )
+    assert codec.term_to_binary(SubPid(Atom("a@b"), 1, 2, 3), None) == pid_bytes
+
+
 def test_encode_hook_missing(codec: ModuleType) -> None:
     """Tries to encode a special class Class3 without an encode hook"""
 

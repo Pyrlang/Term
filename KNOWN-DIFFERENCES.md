@@ -65,9 +65,8 @@ when the difference is gone.
 ## Python codec vs native codec
 
 - **Encode hook exceptions.** Python lets an exception from `encode_hook`,
-  `catch_all` or `__etf__` escape unchanged; native raises `PyCodecError`
-  with it as `__cause__`. Example: `term_to_binary(object(),
-  {"encode_hook": {"catch_all": f}})` with `f` raising `ValueError`.
-- **Type dispatch.** Native picks the encoding by the type's `__name__`,
-  Python by `isinstance`. Example: a user class named `Pid` is encoded as a
-  pid by native, as a generic object by Python (plan section 2.2).
+  `catch_all`, `__etf__` or the generic object encoding escape unchanged;
+  native raises `PyCodecError` with it as `__cause__`. Examples:
+  `term_to_binary(object(), {"encode_hook": {"catch_all": f}})` with `f`
+  raising `ValueError`; `term_to_binary(bytearray(b"x"))` (`AttributeError`:
+  no `__dict__`).
