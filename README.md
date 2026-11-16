@@ -163,4 +163,4 @@ own, make sure to use `encode_hook` when encoding.
 ## Documentation
 
 Data types, codec options, the API reference and the known differences
-from Erlang/OTP: https://pyrlang.github.io/term/
+from Erlang/OTP: https://pyrlang.clau.se/term/

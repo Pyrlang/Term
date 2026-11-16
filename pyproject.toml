@@ -54,7 +54,7 @@ docs = [
 
 [project.urls]
 Homepage = "https://github.com/Pyrlang/Term/"
-Documentation = "https://pyrlang.github.io/term/"
+Documentation = "https://pyrlang.clau.se/term/"
 
 [tool.setuptools]
 packages = ["term"]

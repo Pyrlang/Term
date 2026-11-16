@@ -25,11 +25,6 @@ fixtures:
 docs:
 	$(PY) -m sphinx -W --keep-going -b html docs-src/source docs-src/build/html
 
-# Publish docs-src/build/html (docs-src/DEPLOY.md).
-.PHONY: docs-deploy
-docs-deploy:
-	tools/deploy-docs.sh
-
 #
 # Installing for development, and for release
 #

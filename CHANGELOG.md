@@ -4,7 +4,7 @@
 
 - Documentation rebuilt (Sphinx, Furo, MyST) and rewritten for the current
   code: data types, codec options, limits; every example on the pages is
-  run by the tests. It moves to https://pyrlang.github.io/term/; generated
+  run by the tests. It moves to https://pyrlang.clau.se/term/; generated
   HTML is no longer kept in the repository.
 - The native codec costs less per call: the term classes are imported once
   per process instead of once per call, and options `None` or `{}` are not
