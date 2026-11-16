@@ -141,6 +141,11 @@ def _limit_memory_windows(headroom: int) -> None:
 def _limit_memory_posix(headroom: int) -> None:
     if sys.platform == "win32":  # lets mypy check this on Windows too
         raise NotImplementedError("POSIX only")
+    if sys.platform == "darwin":
+        # macOS rejects a finite RLIMIT_AS ("current limit exceeds maximum
+        # limit") and does not enforce it; the worker runs without a cap
+        # there, the Python codec's tracemalloc peak check still applies.
+        return
     import resource
 
     # Address space in use now; Linux reports it in /proc, others get a
