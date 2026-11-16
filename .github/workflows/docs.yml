@@ -1,5 +1,7 @@
 # Build the documentation (plan step DOCS-01): Sphinx with warnings as
-# errors, on every push and pull request. The HTML is kept as an artifact.
+# errors, on every push and pull request. The HTML is kept as an artifact,
+# and a push to the default branch publishes it (DOCS-04,
+# docs-src/DEPLOY.md).
 
 name: Docs
 
@@ -30,3 +32,34 @@ jobs:
         with:
           name: docs-html
           path: docs-src/build/html
+
+  deploy:
+    name: Publish to pyrlang.github.io/term/
+    needs: build
+    # Only the default branch of the main repository publishes: never a
+    # pull request, never a fork.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master' && github.repository == 'Pyrlang/Term'
+    runs-on: ubuntu-latest
+    # The protected environment that holds the deploy key (docs-src/DEPLOY.md).
+    environment: docs
+    concurrency:
+      group: docs-deploy
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: docs-html
+          path: docs-src/build/html
+      - name: Publish
+        env:
+          DOCS_DEPLOY_KEY: ${{ secrets.DOCS_DEPLOY_KEY }}
+          DOCS_DEPLOY_NAME: github-actions[bot]
+          DOCS_DEPLOY_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: |
+          key=$(mktemp)
+          trap 'rm -f "$key"' EXIT
+          echo "$DOCS_DEPLOY_KEY" > "$key"
+          chmod 600 "$key"
+          export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          tools/deploy-docs.sh
