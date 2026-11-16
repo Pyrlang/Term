@@ -48,6 +48,8 @@ _REPR_LIMIT = 200
 
 
 def _limit_memory_windows(headroom: int) -> None:
+    if sys.platform != "win32":  # lets mypy check this on POSIX too
+        raise NotImplementedError("Windows only")
     import ctypes
     from ctypes import wintypes
 
