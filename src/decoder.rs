@@ -14,6 +14,7 @@
 
 use flate2::{Decompress, FlushDecompress, Status};
 use pyo3::exceptions::PyTypeError;
+use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyBytes, PyDict, PyInt, PyList, PyString, PyTuple};
 use pyo3::IntoPyObjectExt;
@@ -841,11 +842,14 @@ impl<'py> Decoder<'py> {
         let sz = reader.read_u16()? as usize;
         let arr = reader.read(sz)?;
         let result = match self.bytestring_repr {
-            ByteStringRepresentation::Str => arr
-                .iter()
-                .map(|&b| char::from(b))
-                .collect::<String>()
-                .into_bound_py_any(self.py)?,
+            // ASCII is valid UTF-8 as it is: no conversion (TERM-25).
+            ByteStringRepresentation::Str if arr.is_ascii() => {
+                PyString::new(self.py, str::from_utf8(arr)?).into_any()
+            }
+            // CPython's Latin-1 decoder: one copy, where building UTF-8 for
+            // PyString::new took twenty times as long.
+            ByteStringRepresentation::Str => PyBytes::new(self.py, arr)
+                .call_method1(intern!(self.py, "decode"), (intern!(self.py, "latin-1"),))?,
             ByteStringRepresentation::Bytes => PyBytes::new(self.py, arr).into_any(),
             ByteStringRepresentation::IntList => {
                 PyList::new(self.py, arr.iter().copied())?.into_any()

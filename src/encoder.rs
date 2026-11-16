@@ -19,6 +19,7 @@ use super::consts;
 use super::decoder;
 use super::errors::{CodecError, CodecResult};
 use super::helpers;
+use pyo3::exceptions::PyUnicodeEncodeError;
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyBytes, PyDict, PyInt, PyList, PyString, PyTuple};
@@ -481,26 +482,52 @@ impl<'py> Encoder<'py> {
             self.data.push(consts::TAG_NIL_EXT);
             return Ok(());
         }
-        let size = text.chars().count();
-        let latin1 = text.chars().all(|ch| u8::try_from(ch).is_ok());
-
-        match u16::try_from(size) {
-            Ok(short) if latin1 => {
+        // ASCII text is its own Latin-1 bytes: one copy (TERM-25).
+        if text.is_ascii() {
+            if let Ok(short) = u16::try_from(text.len()) {
+                self.data.reserve(3 + text.len());
                 self.data.push(consts::TAG_STRING_EXT);
                 self.data.push_u16(short);
-                self.data
-                    .extend(text.chars().filter_map(|ch| u8::try_from(ch).ok()));
-            }
-            _ => {
-                self.data.push(consts::TAG_LIST_EXT);
-                self.data
-                    .push_u32(u32::try_from(size).map_err(|_| CodecError::TooLong { size })?);
-                for ch in text.chars() {
-                    self.write_i64(i64::from(u32::from(ch)));
-                }
-                self.data.push(consts::TAG_NIL_EXT);
+                self.data.extend_from_slice(text.as_bytes());
+                return Ok(());
             }
         }
+        let size = py_str.len()?; // characters, kept by CPython
+        if let Ok(short) = u16::try_from(size) {
+            let start = self.data.len();
+            self.data.reserve(3 + size);
+            self.data.push(consts::TAG_STRING_EXT);
+            self.data.push_u16(short);
+            let latin1 = if size >= LATIN1_BY_PYTHON {
+                match latin1_bytes(py_str)? {
+                    Some(bytes) => {
+                        self.data.extend_from_slice(bytes.as_bytes());
+                        true
+                    }
+                    None => false,
+                }
+            } else {
+                // One pass; a code point above 255 undoes it.
+                text.chars().all(|ch| match u8::try_from(ch) {
+                    Ok(byte) => {
+                        self.data.push(byte);
+                        true
+                    }
+                    Err(_) => false,
+                })
+            };
+            if latin1 {
+                return Ok(());
+            }
+            self.data.truncate(start);
+        }
+        self.data.push(consts::TAG_LIST_EXT);
+        self.data
+            .push_u32(u32::try_from(size).map_err(|_| CodecError::TooLong { size })?);
+        for ch in text.chars() {
+            self.write_i64(i64::from(u32::from(ch)));
+        }
+        self.data.push(consts::TAG_NIL_EXT);
         Ok(())
     }
 
@@ -704,6 +731,22 @@ impl<'py> Encoder<'py> {
         Ok(())
     }
 } // end impl
+
+/// Non-ASCII strings of at least this many characters are encoded to
+/// Latin-1 by CPython (one copy; the Rust loop took ten times as long).
+/// Shorter ones stay in Rust: a string that is not Latin-1 makes CPython
+/// raise, and the exception costs more than the loop.
+const LATIN1_BY_PYTHON: usize = 1024;
+
+/// `text.encode("latin-1")`, or None if a character is above 255.
+fn latin1_bytes<'py>(text: &Bound<'py, PyString>) -> CodecResult<Option<Bound<'py, PyBytes>>> {
+    let py = text.py();
+    match text.call_method1(intern!(py, "encode"), (intern!(py, "latin-1"),)) {
+        Ok(bytes) => Ok(Some(bytes.cast_into::<PyBytes>()?)),
+        Err(e) if e.is_instance_of::<PyUnicodeEncodeError>(py) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
 
 /// SMALL_BIG_EXT of a magnitude that fits 64 bits: tag, byte count, sign,
 /// then the magnitude little-endian without leading zero bytes.
