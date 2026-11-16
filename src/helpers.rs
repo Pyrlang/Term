@@ -12,29 +12,54 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use cpython::{FromPyObject, PyDict, PyObject, PyString, Python};
+use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyInt, PyString};
 
 use super::errors::{CodecError, CodecResult};
 
-/// Get dict value with string key, expect it to be string too, or return
-/// the default value.
-pub fn get_str_opt(py: Python, opts: &PyDict, optname: &str, default: &str) -> CodecResult<String> {
-    match opts.get_item(py, optname) {
-        Some(val) => {
-            let py_str: PyString = PyString::extract(py, &val)?;
-            let s = py_str.to_string_lossy(py).into_owned();
-            Ok(s)
-        }
-        None => Ok(default.to_string()),
+/// The text of a str option value.
+fn str_value(val: &Bound<'_, PyAny>) -> CodecResult<String> {
+    Ok(val.cast::<PyString>()?.to_string_lossy().into_owned())
+}
+
+/// The options dict to read, or None when every option keeps its default:
+/// for `None` and for `{}` no option is looked up (TERM-24).
+pub fn options<'py>(opt: &Bound<'py, PyAny>) -> CodecResult<Option<Bound<'py, PyDict>>> {
+    if opt.is_none() {
+        return Ok(None);
+    }
+    let dict = opt.cast::<PyDict>()?;
+    Ok((!dict.is_empty()).then(|| dict.clone()))
+}
+
+/// Get dict value with string key, expect a positive int (a size or a
+/// limit), or return the default value.
+pub fn get_positive_int_opt(
+    opts: &Bound<'_, PyDict>,
+    optname: &str,
+    default: usize,
+) -> CodecResult<usize> {
+    match opts.get_item(PyString::intern(opts.py(), optname))? {
+        Some(val) => positive_int(optname, &val),
+        None => Ok(default),
     }
 }
 
-/// Given a dict or a possibly None, return dict
-pub fn maybe_dict(py: Python, dict_or_none: PyObject) -> PyDict {
-    if dict_or_none == py.None() {
-        PyDict::new(py)
-    } else {
-        PyDict::extract(py, &dict_or_none).unwrap()
+/// The value of an option that is a positive int (a size or a limit).
+pub fn positive_int(optname: &str, val: &Bound<'_, PyAny>) -> CodecResult<usize> {
+    // bool is an int subclass in Python, but not a size
+    if !val.is_exact_instance_of::<PyInt>() {
+        return Err(bad_positive_int(optname, val));
+    }
+    match val.extract::<usize>() {
+        Ok(n) if n > 0 => Ok(n),
+        _ => Err(bad_positive_int(optname, val)),
+    }
+}
+
+fn bad_positive_int(optname: &str, val: &Bound<'_, PyAny>) -> CodecError {
+    CodecError::BadOptions {
+        txt: format!("'{}' option is {}; expected a positive int", optname, val),
     }
 }
 
@@ -54,8 +79,8 @@ pub enum ByteStringRepresentation {
 }
 
 /// Option: "atom" => "bytes" | "str" | "Atom" | "StrictAtom" (as Atom class, default)
-pub fn get_atom_opt(py: Python, opts1: &PyDict) -> CodecResult<AtomRepresentation> {
-    let opt_s = get_str_opt(py, opts1, "atom", "Atom")?;
+pub fn atom_opt(val: &Bound<'_, PyAny>) -> CodecResult<AtomRepresentation> {
+    let opt_s = str_value(val)?;
     match opt_s.as_ref() {
         "bytes" => Ok(AtomRepresentation::Bytes),
         "str" => Ok(AtomRepresentation::Str),
@@ -72,8 +97,8 @@ pub fn get_atom_opt(py: Python, opts1: &PyDict) -> CodecResult<AtomRepresentatio
 }
 
 /// Option: "byte_string" => "bytes" | "str" | "int_list" (default: str)
-pub fn get_byte_str_opt(py: Python, opts1: &PyDict) -> CodecResult<ByteStringRepresentation> {
-    let opt_s: String = get_str_opt(py, opts1, "byte_string", "str")?;
+pub fn byte_str_opt(val: &Bound<'_, PyAny>) -> CodecResult<ByteStringRepresentation> {
+    let opt_s = str_value(val)?;
     match opt_s.as_ref() {
         "bytes" => Ok(ByteStringRepresentation::Bytes),
         "str" => Ok(ByteStringRepresentation::Str),
@@ -86,6 +111,47 @@ pub fn get_byte_str_opt(py: Python, opts1: &PyDict) -> CodecResult<ByteStringRep
             Err(CodecError::BadOptions { txt })
         }
     }
+}
+
+// The "bitstring" decode option: what a BIT_BINARY_EXT becomes in Python.
+#[derive(Eq, PartialEq, Copy, Clone)]
+pub enum BitstringRepresentation {
+    Tuple,
+    BitString,
+}
+
+/// Option: "bitstring" => "tuple" (default) | "BitString"
+pub fn bitstring_opt(val: &Bound<'_, PyAny>) -> CodecResult<BitstringRepresentation> {
+    let opt_s = str_value(val)?;
+    match opt_s.as_ref() {
+        "tuple" => Ok(BitstringRepresentation::Tuple),
+        "BitString" => Ok(BitstringRepresentation::BitString),
+        other => Err(CodecError::BadOptions {
+            txt: format!(
+                "'bitstring' option is '{}' while expected: tuple, BitString",
+                other
+            ),
+        }),
+    }
+}
+
+/// BIT_BINARY_EXT carries 1..8 bits in its last byte, so it has a last byte
+/// (binary_SUITE:bad_terms, bad_binary_to_term).
+pub fn check_bits(size: usize, bits: u8) -> CodecResult<()> {
+    if !(1..=8).contains(&bits) || size == 0 {
+        return Err(CodecError::BadBitstring { size, bits });
+    }
+    Ok(())
+}
+
+/// Copy of a bitstring's bytes with the unused low bits of the last byte
+/// cleared, as OTP does. `bits` is 1..8 (see `check_bits`).
+pub fn mask_last_byte(value: &[u8], bits: u8) -> Vec<u8> {
+    let mut out = value.to_vec();
+    if let Some(last) = out.last_mut() {
+        *last &= 0xFFu8.checked_shl(u32::from(8 - bits)).unwrap_or(0);
+    }
+    out
 }
 
 pub trait VecWriteExt {
@@ -110,5 +176,27 @@ impl VecWriteExt for Vec<u8> {
 
     fn push_f64(&mut self, value: f64) {
         self.extend(value.to_be_bytes());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{check_bits, mask_last_byte};
+
+    #[test]
+    fn mask_clears_unused_low_bits() {
+        assert_eq!(mask_last_byte(&[0xFF, 0xFF], 1), [0xFF, 0x80]);
+        assert_eq!(mask_last_byte(&[0xFF], 7), [0xFE]);
+        assert_eq!(mask_last_byte(&[0xFF], 8), [0xFF]);
+        assert_eq!(mask_last_byte(&[], 3), [0u8; 0]);
+    }
+
+    #[test]
+    fn bits_must_be_1_to_8_with_a_byte() {
+        assert!(check_bits(1, 1).is_ok());
+        assert!(check_bits(1, 8).is_ok());
+        assert!(check_bits(1, 0).is_err());
+        assert!(check_bits(1, 9).is_err());
+        assert!(check_bits(0, 1).is_err());
     }
 }

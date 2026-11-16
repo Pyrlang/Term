@@ -1,18 +1,11 @@
 #
-# Running `make dev` will set up links for development using symlink to the library source
-# Running `make install` will compile a release and install it properly as a release
+# `make dev` installs the package editable (the native codec is built in
+# place); `make install` installs it as a release would.
 #
 
-LIBNAME=native_codec_impl
 ROOT=$(shell pwd)
 PIP=pip3
 PY=python3
-
-#.PHONY: compile
-#compile:
-#	cargo build && \
-#	ln -fs $(ROOT)/target/debug/lib$(LIBNAME).so $(ROOT)/target/debug/$(LIBNAME).so
-# && cargo build --release
 
 .PHONY: clearterminal
 clearterminal:
@@ -20,36 +13,36 @@ clearterminal:
 
 .PHONY: test
 test: clearterminal
-	for f in $(shell ls test/*_test.py); do \
-		echo "RUNNING $$f"; \
-		$(PY) $$f || exit 1; \
-	done
+	$(PY) -m pytest test
 
-.PHONY: clearterminal dtest
-dtest: compile
-	PYTHONPATH=$(ROOT):$(ROOT)/target/debug gdb --args python3 test/etf_decode_test.py
+# Regenerate the golden ETF fixtures with the Erlang/OTP on PATH (use OTP 29).
+.PHONY: fixtures
+fixtures:
+	erlc -o test/erl test/erl/gen_fixtures.erl test/erl/otp_vectors.erl
+	erl -noshell -pa test/erl -run gen_fixtures main test/fixtures -s init stop
 
 .PHONY: docs
 docs:
-	rm -rf $(ROOT)/docs; \
-	cd docs-src && \
-	$(MAKE) html && \
-	mv -f $(ROOT)/docs-src/build/html $(ROOT)/docs && \
-	touch $(ROOT)/docs/.nojekyll
+	$(PY) -m sphinx -W --keep-going -b html docs-src/source docs-src/build/html
 
 #
 # Installing for development, and for release
 #
-.PHONY: install dev requirements
-requirements:
-	$(PIP) install -r requirements.txt
-dev: requirements
-	$(PY) setup.py develop
+.PHONY: install dev
+dev:
+	$(PIP) install -e . --config-settings editable_mode=compat
 
-install: requirements
-	$(PY) setup.py install
+install:
+	$(PIP) install .
 
-# Run Pyre type check (requires: pip install pyre-check):
-.PHONY: pyre
-pyre:
-	pyre check
+# The checks AGENTS.md requires before a commit.
+.PHONY: check
+check:
+	black --check . && isort --check . && mypy term \
+	&& cargo fmt --check && cargo clippy --all-targets -- -D warnings \
+	&& cargo test && $(PY) -m pytest test
+
+# The codec benchmark against OTP (release build; see test/bench/run.py).
+.PHONY: bench
+bench:
+	$(PY) test/bench/run.py

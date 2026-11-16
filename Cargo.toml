@@ -1,16 +1,13 @@
 [package]
 name = "native_codec_impl"
-version = "1.4.1"
+version = "2.0.0"
 authors = ["Dmytro Lytovchenko <dmytro.lytovchenko@erlang-solutions.com>"]
 edition = "2021"
 
 [lib]
 crate-type = ["cdylib"]
 
-[dependencies.cpython]
-version = "0.7.2"
-features = ["extension-module"]
-
 [dependencies]
+pyo3 = { version = "0.30.1", features = ["abi3-py311"] }
 flate2 = "1"
 thiserror = "1"

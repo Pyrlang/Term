@@ -11,23 +11,33 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+"""Erlang process identifiers."""
+
+from typing import Protocol
+
 from term.basetypes import BasePid
 
 PID_MARKER = "pyrlang.Pid"
 
 
-class Pid(BasePid):
-    """ Represents Erlang-style process identifier with 3 components. Node
-        component is always 0 for local node, otherwise it can take arbitrary
-        integer values.
+class _NamedNode(Protocol):
+    """Anything with a node name, such as ``pyrlang.node.Node``."""
 
-        A pid is created by Erlang automatically. Pyrlang Process also generates
-        one when it is born to register itself in the process registry. Pid
-        uniquely identifies a running process in the cluster.
+    @property
+    def node_name_(self) -> str: ...
+
+
+class Pid(BasePid):
+    """Represents Erlang-style process identifier with 3 components. Node
+    component is always 0 for local node, otherwise it can take arbitrary
+    integer values.
+
+    A pid is created by Erlang automatically. Pyrlang Process also generates
+    one when it is born to register itself in the process registry. Pid
+    uniquely identifies a running process in the cluster.
     """
 
-    def __init__(self, node_name: str, id: int, serial: int,
-                 creation: int) -> None:
+    def __init__(self, node_name: str, id: int, serial: int, creation: int) -> None:
         self.node_name_ = node_name
         """ NOTE: native encoder assumes this is a string. """
 
@@ -35,32 +45,40 @@ class Pid(BasePid):
         self.serial_ = serial
         self.creation_ = creation
 
-    def is_local_to(self, node):
-        """ Compares self.node_name to other node.node_name
-            :param node: Check whether pid is local to the node.
-            :type node: pyrlang.node.Node
+    def is_local_to(self, node: _NamedNode) -> bool:
+        """Compares self.node_name to other node.node_name
+        :param node: Check whether pid is local to the node.
+        :type node: pyrlang.node.Node
         """
         return self.node_name_ == node.node_name_
 
     def __repr__(self) -> str:
-        return "<%d.%d.%d @ %s>" % (self.creation_, self.id_, self.serial_,
-                                    self.node_name_)
+        return "<%d.%d.%d @ %s>" % (
+            self.creation_,
+            self.id_,
+            self.serial_,
+            self.node_name_,
+        )
 
     def __str__(self) -> str:
         return self.__repr__()
 
-    def equals(self, other) -> bool:
-        return isinstance(other, Pid) \
-            and self.node_name_ == other.node_name_ \
-            and self.id_ == other.id_ \
-            and self.serial_ == other.serial_ \
+    def equals(self, other: object) -> bool:
+        """True if ``other`` is the same pid: node, id, serial and creation."""
+        return (
+            isinstance(other, Pid)
+            and self.node_name_ == other.node_name_
+            and self.id_ == other.id_
+            and self.serial_ == other.serial_
             and self.creation_ == other.creation_
+        )
 
     __eq__ = equals
 
-    def __ne__(self, other):
+    def __ne__(self, other: object) -> bool:
         return not self.equals(other)
 
-    def __hash__(self):
-        return hash((PID_MARKER, self.node_name_,
-                     self.id_, self.serial_, self.creation_))
+    def __hash__(self) -> int:
+        return hash(
+            (PID_MARKER, self.node_name_, self.id_, self.serial_, self.creation_)
+        )

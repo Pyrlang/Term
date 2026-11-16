@@ -12,17 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// For cpython macros
-#![allow(unused_braces, clippy::manual_strip)]
-
-use cpython::{
-    py_exception, py_fn, py_module_initializer, PyBytes, PyModule, PyObject, PyResult, Python,
-};
+use pyo3::prelude::*;
+use pyo3::types::PyBytes;
 
 use self::decoder::Decoder;
 use self::encoder::Encoder;
-use self::errors::pyresult_from;
 
+mod classes;
 mod consts;
 mod decoder;
 mod encoder;
@@ -30,70 +26,77 @@ mod errors;
 mod helpers;
 mod reader;
 
-py_exception!(native_codec_impl, PyCodecError);
+// The one exception type every codec failure reaches Python as.
+pyo3::create_exception!(
+    native_codec_impl,
+    PyCodecError,
+    pyo3::exceptions::PyException
+);
 
 /// Strips 131 byte header and unpacks if the data was compressed.
-fn binary_to_term(py: Python, b: PyBytes, opts: PyObject) -> PyResult<PyObject> {
-    let mut dec_state = Decoder::new(py, opts)?;
-    let mut reader = b.data(py).into();
-    pyresult_from(dec_state.decode_with_131tag(&mut reader))
+/// Returns a tuple (value, remaining bytes).
+#[pyfunction]
+#[pyo3(signature = (b, opt))]
+fn binary_to_term<'py>(
+    py: Python<'py>,
+    b: &Bound<'py, PyBytes>,
+    opt: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let mut dec_state = Decoder::new(py, opt)?;
+    let mut reader = b.as_bytes().into();
+    Ok(dec_state.decode_with_131tag(&mut reader)?)
 }
 
-fn binary_to_term_2(py: Python, b: PyBytes, opts: PyObject) -> PyResult<PyObject> {
-    let mut dec_state = Decoder::new(py, opts)?;
-    let mut reader = b.data(py).into();
-    let result = dec_state.decode(&mut reader);
-    pyresult_from(result)
+/// Decodes a term without the 131 byte header.
+/// Returns a tuple (value, remaining bytes).
+#[pyfunction]
+#[pyo3(signature = (b, opt))]
+fn binary_to_term_2<'py>(
+    py: Python<'py>,
+    b: &Bound<'py, PyBytes>,
+    opt: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let mut dec_state = Decoder::new(py, opt)?;
+    let mut reader = b.as_bytes().into();
+    Ok(dec_state.decode_and_wrap(&mut reader)?)
 }
 
-fn term_to_binary(py: Python, py_term: PyObject, opt: PyObject) -> PyResult<PyBytes> {
+/// Encodes a term and prepends the 131 byte header.
+#[pyfunction]
+#[pyo3(signature = (py_term, opt))]
+fn term_to_binary<'py>(
+    py: Python<'py>,
+    py_term: &Bound<'py, PyAny>,
+    opt: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyBytes>> {
     let mut enc_state = Encoder::new(py, opt)?;
 
     // Rest of the function is identical to ``term_to_binary_2`` except that
     // 131 byte is pushed to the output before the encoder is called
     enc_state.data.push(consts::ETF_VERSION_TAG);
 
-    enc_state.encode(&py_term)?;
-    Ok(PyBytes::new(py, enc_state.data.as_ref()))
+    enc_state.encode(py_term)?;
+    Ok(enc_state.into_bytes()?)
 }
 
-fn term_to_binary_2(py: Python, py_term: PyObject, opt: PyObject) -> PyResult<PyBytes> {
+/// Encodes a term without the 131 byte header.
+#[pyfunction]
+#[pyo3(signature = (py_term, opt))]
+fn term_to_binary_2<'py>(
+    py: Python<'py>,
+    py_term: &Bound<'py, PyAny>,
+    opt: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyBytes>> {
     let mut enc_state = Encoder::new(py, opt)?;
-    enc_state.encode(&py_term)?;
-    Ok(PyBytes::new(py, enc_state.data.as_ref()))
+    enc_state.encode(py_term)?;
+    Ok(enc_state.into_bytes()?)
 }
 
-// add bindings to the generated python module
-// N.B: names: "librust2py" must be the name of the `.so` or `.pyd` file
-#[inline]
-fn m_init(py: Python, m: &PyModule) -> PyResult<()> {
-    m.add(py, "__doc__", "Erlang Term Format encoding and decoding.")?;
-    m.add(
-        py,
-        "binary_to_term",
-        py_fn!(py, binary_to_term(b: PyBytes, opt: PyObject)),
-    )?;
-    m.add(
-        py,
-        "binary_to_term_2",
-        py_fn!(py, binary_to_term_2(b: PyBytes, opt: PyObject)),
-    )?;
-    m.add(
-        py,
-        "term_to_binary",
-        py_fn!(py, term_to_binary(py_term: PyObject, opt: PyObject)),
-    )?;
-    m.add(
-        py,
-        "term_to_binary_2",
-        py_fn!(py, term_to_binary_2(py_term: PyObject, opt: PyObject)),
-    )?;
-    m.add(py, "PyCodecError", py.get_type::<PyCodecError>())?;
-    Ok(())
+/// Erlang Term Format encoding and decoding.
+// The module name must match the file name `native_codec_impl.*.pyd/.so` that
+// setuptools-rust builds for `term.native_codec_impl`.
+#[pymodule]
+mod native_codec_impl {
+    #[pymodule_export]
+    use super::{binary_to_term, binary_to_term_2, term_to_binary, term_to_binary_2, PyCodecError};
 }
-py_module_initializer!(
-    native_codec_impl,
-    initnative_codec_impl,
-    PyInit_native_codec_impl,
-    |py, m| { m_init(py, m) }
-);

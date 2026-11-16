@@ -1,2 +1,114 @@
 [build-system]
-requires = ["setuptools", "wheel", "setuptools-rust"]
+# setuptools-rust 1.12+ configures PyO3 0.30 for an extension module (the
+# `extension-module` cargo feature is deprecated).
+requires = ["setuptools>=77", "setuptools-rust>=1.12"]
+build-backend = "setuptools.build_meta"
+
+[tool.bumpver]
+current_version = "2.0.0"
+version_pattern = "MAJOR.MINOR.PATCH"
+commit_message = "bump version {old_version} -> {new_version}"
+commit = true
+tag = true
+push = true
+
+[project]
+name = "pyrlang-term"
+version = "2.0.0"
+description = "Erlang term and External Term Format codec in Python and native Rust extension"
+readme = "README.md"
+authors = [
+    { name = "Dmytro Lytovchenko", email = "dmytro.lytovchenko@gmail.com" },
+    { name = "Johan Sommerfeld", email = "pyrlang@s2hc.com" }
+]
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+classifiers = [
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Rust",
+]
+keywords = ["erlang", "protocol", "encode", "decode", "etf", "term", "binary"]
+dependencies = [
+]
+requires-python = ">=3.11"
+
+[project.optional-dependencies]
+dev = [
+    "black", "bumpver", "isort", "mypy", "pip-tools", "pytest", "setuptools-rust>=1.12",
+]
+
+# Builds the documentation (docs-src/): `pip install -e . --group docs`.
+# A dependency group, not an extra: users of the package never install it.
+[dependency-groups]
+docs = [
+    "sphinx==9.2.0",
+    "furo==2025.12.19",
+    "myst-parser==5.2.0",
+    "sphinx-copybutton==0.5.2",
+]
+
+[project.urls]
+Homepage = "https://github.com/Pyrlang/Term/"
+Documentation = "https://pyrlang.clau.se/term/"
+
+[tool.setuptools]
+packages = ["term"]
+# The native extension cannot be imported from a zip file.
+zip-safe = false
+
+[[tool.setuptools-rust.ext-modules]]
+# The native codec (src/). Optional: without a Rust toolchain the package
+# installs with the Python codec only, which term/codec.py falls back to.
+target = "term.native_codec_impl"
+binding = "PyO3"
+optional = true
+
+[tool.distutils.bdist_wheel]
+# One abi3 wheel per platform serves every CPython >= 3.11 (PyO3 feature
+# abi3-py311 in Cargo.toml).
+py-limited-api = "cp311"
+
+[tool.setuptools.package-data]
+# PEP 561: ship the type marker and the stub for the native module.
+term = ["py.typed", "*.pyi"]
+
+[tool.pytest.ini_options]
+markers = [
+    "erlang: needs Erlang/OTP (erl on PATH); skipped when it is missing",
+    "bench: runs the codec benchmark at a tiny scale; only with -m bench",
+]
+
+[tool.black]
+# Matches requires-python (decision 2 in .agents/00-plan.md).
+target-version = ["py311"]
+
+[tool.isort]
+profile = "black"
+
+[tool.mypy]
+python_version = "3.11"
+packages = ["term"]
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+
+# The version lives in pyproject.toml; Cargo.toml carries the same version in
+# semver form (test/test_packaging.py checks that they agree).
+[tool.bumpver.file_patterns]
+"pyproject.toml" = [
+    'current_version = "{version}"',
+    '^version = "{version}"',
+]
+"Cargo.toml" = [
+    '^version = "{version}"',
+]
+

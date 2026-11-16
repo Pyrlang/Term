@@ -1,2 +1,2 @@
-include Cargo.toml
+include Cargo.toml Cargo.lock rust-toolchain.toml CHANGELOG.md
 recursive-include src *

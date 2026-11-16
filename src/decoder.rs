@@ -12,72 +12,278 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use cpython::{
-    FromPyObject, ObjectProtocol, PyBool, PyBytes, PyClone, PyDict, PyList, PyObject, PyString,
-    PyTuple, Python, PythonObject, ToPyObject,
-};
-use flate2::bufread::ZlibDecoder;
-use std::io::Read;
+use flate2::{Decompress, FlushDecompress, Status};
+use pyo3::exceptions::PyTypeError;
+use pyo3::intern;
+use pyo3::prelude::*;
+use pyo3::types::{PyBool, PyBytes, PyDict, PyInt, PyList, PyString, PyTuple};
+use pyo3::IntoPyObjectExt;
+use std::borrow::Cow;
 use std::str;
 
+use crate::classes::{term_classes, TermClasses};
 use crate::reader::{Readable, Reader};
 
 use super::consts;
 use super::errors::{CodecError, CodecResult};
 use super::helpers;
-use super::helpers::{AtomRepresentation, ByteStringRepresentation};
+use super::helpers::{AtomRepresentation, BitstringRepresentation, ByteStringRepresentation};
 
-pub struct Decoder<'a> {
-    py: Python<'a>, // Python instance will live at least as long as Decoder
+/// Default of option "max_depth": how deeply terms may nest.
+pub const DEFAULT_MAX_DEPTH: usize = 4096;
+
+/// Default of option "max_size": the largest size, in bytes, that a
+/// compressed term may declare for its data (256 MiB).
+pub const DEFAULT_MAX_SIZE: usize = 256 * 1024 * 1024;
+
+/// Most elements reserved ahead for one compound term; more grow on demand.
+const PREALLOC_MAX: usize = 4096;
+
+/// Bytes added to the output buffer at a time while inflating.
+const INFLATE_CHUNK: usize = 64 * 1024;
+
+pub struct Decoder<'py> {
+    py: Python<'py>, // Python instance will live at least as long as Decoder
     atom_representation: AtomRepresentation,
     bytestring_repr: ByteStringRepresentation,
+    bitstring_repr: BitstringRepresentation,
+    // Options "max_depth" and "max_size" (resource limits).
+    max_depth: usize,
+    max_size: usize,
 
-    pub decode_hook: PyDict,
-    cached_atom_pyclass: Option<PyObject>,
-    cached_pid_pyclass: Option<PyObject>,
-    cached_ref_pyclass: Option<PyObject>,
-    cached_fun_pyclass: Option<PyObject>,
-    cached_improper_list_pyclass: Option<PyObject>,
+    // The "decode_hook" option; None when it is missing or empty.
+    decode_hook: Option<Bound<'py, PyDict>>,
+    // The "atom_call" option: builds every atom from its text when set.
+    atom_call: Option<Bound<'py, PyAny>>,
+    // The "atom_cache" option: the atom texts ATOM_CACHE_REF indexes, a
+    // list or tuple; entries are checked when used.
+    atom_cache: Option<Bound<'py, PyAny>>,
+    // The classes of the values built; node names, module and field names
+    // are always `classes.atom`, whatever the "atom" option says.
+    classes: &'static TermClasses,
 }
 
-impl<'a> Decoder<'a> {
+/// A compound term whose children are being decoded (see `Decoder::decode`).
+/// `remaining` counts the children still to come.
+enum Frame<'py> {
+    /// LIST_EXT elements, appended to the Python list as they come (TERM-28:
+    /// collecting them in a `Vec` first cost a Rust allocation and a copy).
+    List {
+        list: Bound<'py, PyList>,
+        remaining: usize,
+    },
+    /// All elements read; a tail that is not NIL comes next, into `tail`.
+    ListTail {
+        list: Bound<'py, PyList>,
+        tail: Option<Bound<'py, PyAny>>,
+    },
+    Tuple {
+        items: Bound<'py, PyList>,
+        remaining: usize,
+    },
+    /// Keys and values in turn; `key` holds a key while its value is read.
+    Map {
+        dict: Bound<'py, PyDict>,
+        key: Option<Bound<'py, PyAny>>,
+        remaining: usize,
+    },
+    /// RECORD_EXT values; `dict` has the field names (in order) and gets
+    /// the values, `next` indexes `names` for the next value.
+    Record {
+        head: Box<RecordHead<'py>>,
+        dict: Bound<'py, PyDict>,
+        names: Vec<Bound<'py, PyAny>>,
+        next: usize,
+    },
+    /// NEW_FUN_EXT free variables; the parts before them are in `head`.
+    Fun {
+        head: Box<FunHead<'py>>,
+        items: Vec<Bound<'py, PyAny>>,
+        remaining: usize,
+    },
+}
+
+// The heads of funs and records are boxed: they are rare and large, and
+// every frame is as large as the largest variant.
+
+/// The parts of a RECORD_EXT before its field names.
+struct RecordHead<'py> {
+    module: Bound<'py, PyAny>,
+    name: Bound<'py, PyAny>,
+    exported: bool,
+}
+
+/// The parts of a NEW_FUN_EXT that come before its free variables.
+struct FunHead<'py> {
+    arity: u8,
+    uniq: Bound<'py, PyBytes>,
+    index: u32,
+    module: Bound<'py, PyAny>,
+    old_index: i64,
+    old_uniq: i64,
+    pid: Bound<'py, PyAny>,
+}
+
+/// What reading the start of a term gives.
+enum Start<'py> {
+    Value(Bound<'py, PyAny>),
+    Open(Frame<'py>),
+}
+
+/// A frame after it took a child (or just opened): still waiting for more,
+/// or finished as a value (`true` if the decode hook already saw it).
+enum Progress<'py> {
+    Waiting(Frame<'py>),
+    Done(Bound<'py, PyAny>, bool),
+}
+
+/// Read a count field (32 bits, or 8 if `small`) and return it if the input
+/// can hold that many elements of at least `per_element` bytes each; checked
+/// before anything is allocated.
+fn read_count(
+    reader: &mut Reader,
+    small: bool,
+    per_element: usize,
+    what: &'static str,
+) -> CodecResult<usize> {
+    let count = if small {
+        usize::from(reader.read_u8()?)
+    } else {
+        reader.read_u32()? as usize
+    };
+    let remaining = reader.remaining();
+    match count.checked_mul(per_element) {
+        Some(need) if need <= remaining => Ok(count),
+        _ => Err(CodecError::TooManyElements {
+            what,
+            count,
+            remaining,
+        }),
+    }
+}
+
+/// A vector for `count` children, reserving no more than `PREALLOC_MAX`.
+fn items_for<'py>(count: usize) -> Vec<Bound<'py, PyAny>> {
+    Vec::with_capacity(count.min(PREALLOC_MAX))
+}
+
+/// The data of a compressed term: exactly `declared` bytes and a complete
+/// zlib stream. Inflates at most about `declared + INFLATE_CHUNK` bytes, so a
+/// stream that holds more fails without producing it.
+fn inflate(input: &[u8], declared: usize, max_size: usize) -> CodecResult<Vec<u8>> {
+    if declared > max_size {
+        return Err(CodecError::CompressedTooLarge { declared, max_size });
+    }
+    let mut out = Vec::new();
+    let mut z = Decompress::new(true);
+    loop {
+        if out.len() > declared {
+            return Err(CodecError::CompressedSizeMismatch);
+        }
+        if out.len() == out.capacity() {
+            out.reserve(INFLATE_CHUNK.min(declared - out.len() + 1));
+        }
+        let consumed =
+            usize::try_from(z.total_in()).map_err(|_| CodecError::CompressedSizeMismatch)?;
+        let rest = input.get(consumed..).unwrap_or_default();
+        let before = (z.total_in(), out.len());
+        let status = z
+            .decompress_vec(rest, &mut out, FlushDecompress::None)
+            .map_err(|e| CodecError::Compressed { txt: e.to_string() })?;
+        if status == Status::StreamEnd {
+            break;
+        }
+        if (z.total_in(), out.len()) == before && out.len() < out.capacity() {
+            // No progress with room to write: the input ends inside the stream.
+            return Err(CodecError::CompressedIncomplete);
+        }
+    }
+    if out.len() != declared {
+        return Err(CodecError::CompressedSizeMismatch);
+    }
+    Ok(out)
+}
+
+impl<'py> Decoder<'py> {
     /// Create decoder instance. Parse options.
-    pub fn new(py: Python, opts: PyObject) -> CodecResult<Decoder> {
-        // If opts is None, make it empty Dict, otherwise take it as PyDict
-        let opts1 = helpers::maybe_dict(py, opts);
-        let aopt = helpers::get_atom_opt(py, &opts1)?;
-        let cached_atom_pyclass = opts1.get_item(py, "atom_call");
-        let s8opt = helpers::get_byte_str_opt(py, &opts1)?;
-
-        let decode_hook = match opts1.get_item(py, "decode_hook") {
-            Some(ref h1) => PyDict::extract(py, h1)?,
-            None => PyDict::new(py),
-        };
-
-        Ok(Decoder {
+    pub fn new(py: Python<'py>, opts: &Bound<'py, PyAny>) -> CodecResult<Decoder<'py>> {
+        let mut decoder = Decoder {
             py,
-            atom_representation: aopt,
-            bytestring_repr: s8opt,
-            decode_hook,
-            cached_atom_pyclass,
-            cached_pid_pyclass: None,
-            cached_ref_pyclass: None,
-            cached_fun_pyclass: None,
-            cached_improper_list_pyclass: None,
-            //      cached_bitstr_pyclass: None,
-        })
+            atom_representation: AtomRepresentation::TermAtom,
+            bytestring_repr: ByteStringRepresentation::Str,
+            bitstring_repr: BitstringRepresentation::Tuple,
+            max_depth: DEFAULT_MAX_DEPTH,
+            max_size: DEFAULT_MAX_SIZE,
+            decode_hook: None,
+            atom_call: None,
+            atom_cache: None,
+            classes: term_classes(py)?,
+        };
+        if let Some(opts1) = helpers::options(opts)? {
+            decoder.read_options(&opts1)?;
+        }
+        Ok(decoder)
     }
 
-    pub fn decode_and_wrap(&mut self, reader: &mut Reader) -> Result<PyObject, CodecError> {
+    /// Set the options given in `opts1`; the others keep their defaults.
+    /// One pass over the dict: pyrlang passes one option with every packet,
+    /// and a lookup per known option cost more than decoding a small term.
+    fn read_options(&mut self, opts1: &Bound<'py, PyDict>) -> CodecResult<()> {
+        for (key, value) in opts1.iter() {
+            let Ok(key) = key.cast::<PyString>() else {
+                continue;
+            };
+            let Ok(key) = key.to_str() else {
+                continue;
+            };
+            match key {
+                "atom" => self.atom_representation = helpers::atom_opt(&value)?,
+                "byte_string" => self.bytestring_repr = helpers::byte_str_opt(&value)?,
+                "bitstring" => self.bitstring_repr = helpers::bitstring_opt(&value)?,
+                "max_depth" => self.max_depth = helpers::positive_int(key, &value)?,
+                "max_size" => self.max_size = helpers::positive_int(key, &value)?,
+                "atom_call" if value.is_none() => self.atom_call = None,
+                "atom_call" if !value.is_callable() => {
+                    return Err(CodecError::BadOptions {
+                        txt: "'atom_call' must be callable".to_string(),
+                    })
+                }
+                "atom_call" => self.atom_call = Some(value),
+                "atom_cache" if value.is_none() => self.atom_cache = None,
+                "atom_cache"
+                    if !(value.is_instance_of::<PyList>() || value.is_instance_of::<PyTuple>()) =>
+                {
+                    return Err(CodecError::BadOptions {
+                        txt: "'atom_cache' must be a list or tuple of str".to_string(),
+                    })
+                }
+                "atom_cache" => self.atom_cache = Some(value),
+                "decode_hook" if value.is_none() => self.decode_hook = None,
+                "decode_hook" => match value.cast_into::<PyDict>() {
+                    Ok(d) => self.decode_hook = (!d.is_empty()).then_some(d),
+                    Err(_) => {
+                        return Err(CodecError::BadOptions {
+                            txt: "'decode_hook' must be a dict".to_string(),
+                        })
+                    }
+                },
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// Decode one term and return the Python tuple (value, remaining bytes).
+    pub fn decode_and_wrap(&mut self, reader: &mut Reader) -> CodecResult<Bound<'py, PyAny>> {
         let result = self.decode(reader)?;
         let tail = PyBytes::new(self.py, reader.rest());
-        let result = PyTuple::new(self.py, &[result, tail.into_object()]);
-        Ok(result.into_object())
+        let result = PyTuple::new(self.py, [result, tail.into_any()])?;
+        Ok(result.into_any())
     }
 
     /// Strip 131 byte header and uncompress if the data was compressed.
     /// Return: PyTuple(PyObject, Bytes) or CodecError
-    pub fn decode_with_131tag(&mut self, reader: &mut Reader) -> CodecResult<PyObject> {
+    pub fn decode_with_131tag(&mut self, reader: &mut Reader) -> CodecResult<Bound<'py, PyAny>> {
         let pre_tag = reader.read_u8()?;
         if pre_tag != consts::ETF_VERSION_TAG {
             return Err(CodecError::UnsupportedETFVersion);
@@ -86,19 +292,9 @@ impl<'a> Decoder<'a> {
         // Read first byte of term, it might be a compressed term marker
         let tag = reader.peek()?;
         if tag == consts::TAG_COMPRESSED {
-            reader.read_u8().unwrap();
-            let decomp_size = reader.read_u32()? as usize;
-
-            let mut decompressed = Vec::with_capacity(decomp_size);
-            unsafe {
-                decompressed.set_len(decomp_size);
-            }
-            let mut d = ZlibDecoder::new(reader);
-            d.read_exact(&mut decompressed)?;
-            if d.total_out() != decomp_size as u64 {
-                return Err(CodecError::CompressedSizeMismatch);
-            }
-
+            reader.read_u8()?;
+            let declared = reader.read_u32()? as usize;
+            let decompressed = inflate(reader.rest(), declared, self.max_size)?;
             let mut decompressed_reader = (&decompressed).into();
             self.decode_and_wrap(&mut decompressed_reader)
         } else {
@@ -108,21 +304,95 @@ impl<'a> Decoder<'a> {
     }
 
     /// Decodes binary External Term Format (ETF) into a Python structure.
-    /// Returns: (Decoded object, remaining bytes) or CodecError
-    pub fn decode(&mut self, reader: &mut Reader) -> CodecResult<PyObject> {
+    /// Every value in it, the term itself included, passes through the decode
+    /// hook of its type, children first.
+    ///
+    /// Iterative: compound terms wait on an explicit stack of `Frame`, at most
+    /// `max_depth` of them, so the native stack does not grow with the nesting.
+    pub fn decode(&mut self, reader: &mut Reader) -> CodecResult<Bound<'py, PyAny>> {
+        let mut stack: Vec<Frame<'py>> = Vec::new();
+        loop {
+            let progress = match self.start_term(reader)? {
+                Start::Value(value) => Progress::Done(value, false),
+                Start::Open(frame) => self.open(frame, reader)?,
+            };
+            let (mut value, mut hooked) = match progress {
+                Progress::Waiting(frame) => {
+                    if stack.len() >= self.max_depth {
+                        return Err(CodecError::TooDeep {
+                            max_depth: self.max_depth,
+                        });
+                    }
+                    stack.push(frame);
+                    continue;
+                }
+                Progress::Done(value, hooked) => (value, hooked),
+            };
+            // Pass finished values up to the frames waiting for them. A frame
+            // takes its children in place and leaves the stack when complete.
+            loop {
+                if !hooked {
+                    value = self.apply_hook(value)?;
+                }
+                let Some(frame) = stack.last_mut() else {
+                    return Ok(value);
+                };
+                if !self.add_child(frame, value)? {
+                    break;
+                }
+                let Some(frame) = stack.pop() else {
+                    return Err(CodecError::BadValue("decoder stack is empty"));
+                };
+                match self.finish(frame, reader)? {
+                    Progress::Waiting(frame) => {
+                        stack.push(frame);
+                        break;
+                    }
+                    Progress::Done(v, h) => {
+                        value = v;
+                        hooked = h;
+                    }
+                }
+            }
+        }
+    }
+
+    /// `value` passed through the decode hook for its type name, if any.
+    fn apply_hook(&self, value: Bound<'py, PyAny>) -> CodecResult<Bound<'py, PyAny>> {
+        let Some(decode_hook) = &self.decode_hook else {
+            return Ok(value);
+        };
+        let type_name = value.get_type().name()?;
+        match decode_hook.get_item(type_name)? {
+            Some(h1) => Ok(h1.call1((value,))?),
+            None => Ok(value),
+        }
+    }
+
+    /// Read the next term: its value, or a frame for a compound term whose
+    /// children follow.
+    fn start_term(&mut self, reader: &mut Reader) -> CodecResult<Start<'py>> {
         let tag = reader.read_u8()?;
-        let result = match tag {
+        let value = match tag {
             consts::TAG_ATOM_EXT => self.parse_latin1_atom::<u16>(reader),
             consts::TAG_ATOM_UTF8_EXT => self.parse_utf8_atom::<u16>(reader),
             consts::TAG_SMALL_ATOM_EXT => self.parse_latin1_atom::<u8>(reader),
             consts::TAG_SMALL_ATOM_UTF8_EXT => self.parse_utf8_atom::<u8>(reader),
+            consts::TAG_ATOM_CACHE_REF => {
+                let txt = self.atom_cache_text(reader)?;
+                self.create_atom(&txt)
+            }
             consts::TAG_BINARY_EXT => self.parse_binary(reader),
             consts::TAG_BIT_BINARY_EXT => self.parse_bitstring(reader),
-            consts::TAG_NIL_EXT => {
-                let empty_list = PyList::new(self.py, &[]);
-                Ok(empty_list.into_object())
+            consts::TAG_NIL_EXT => Ok(PyList::empty(self.py).into_any()),
+            consts::TAG_LIST_EXT => {
+                // The elements and then the tail, at least one byte each.
+                let count = read_count(reader, false, 1, "LIST_EXT")?;
+                return Ok(Start::Open(Frame::List {
+                    list: PyList::empty(self.py),
+                    remaining: count,
+                }));
             }
-            consts::TAG_LIST_EXT => self.parse_list(reader),
             consts::TAG_STRING_EXT => self.parse_string(reader), // 16-bit sz bytestr
             consts::TAG_SMALL_UINT => self.parse_number::<u8>(reader),
             consts::TAG_INT => self.parse_number::<i32>(reader),
@@ -136,216 +406,347 @@ impl<'a> Decoder<'a> {
                 let sign = reader.read_u8()?;
                 self.parse_arbitrary_length_int(reader, size, sign)
             }
-            consts::TAG_NEW_FLOAT_EXT => self.parse_number::<f64>(reader),
-            consts::TAG_MAP_EXT => self.parse_map(reader),
+            consts::TAG_NEW_FLOAT_EXT => {
+                let value = finite(reader.read_f64()?)?;
+                Ok(value.into_bound_py_any(self.py)?)
+            }
+            consts::TAG_FLOAT_EXT => {
+                let value = float_ext_value(reader.read(31)?)?;
+                Ok(value.into_bound_py_any(self.py)?)
+            }
+            consts::TAG_MAP_EXT => {
+                let pairs = read_count(reader, false, 2, "MAP_EXT")?;
+                return Ok(Start::Open(Frame::Map {
+                    dict: PyDict::new(self.py),
+                    key: None,
+                    remaining: pairs,
+                }));
+            }
             consts::TAG_SMALL_TUPLE_EXT => {
-                let arity = reader.read_u8()? as usize;
-                self.parse_tuple(reader, arity)
+                let arity = read_count(reader, true, 1, "SMALL_TUPLE_EXT")?;
+                return Ok(Start::Open(Frame::Tuple {
+                    items: PyList::empty(self.py),
+                    remaining: arity,
+                }));
             }
             consts::TAG_LARGE_TUPLE_EXT => {
-                let arity = reader.read_u32()? as usize;
-                self.parse_tuple(reader, arity)
+                let arity = read_count(reader, false, 1, "LARGE_TUPLE_EXT")?;
+                return Ok(Start::Open(Frame::Tuple {
+                    items: PyList::empty(self.py),
+                    remaining: arity,
+                }));
             }
             consts::TAG_PID_EXT => self.parse_pid(reader),
             consts::TAG_NEW_PID_EXT => self.parse_new_pid(reader),
+            consts::TAG_PORT_EXT | consts::TAG_NEW_PORT_EXT | consts::TAG_V4_PORT_EXT => {
+                self.parse_port(reader, tag)
+            }
+            consts::TAG_REFERENCE_EXT => self.parse_old_ref(reader),
             consts::TAG_NEW_REF_EXT => self.parse_ref(reader),
             consts::TAG_NEWER_REF_EXT => self.parse_newer_ref(reader),
-            consts::TAG_NEW_FUN_EXT => self.parse_fun(reader),
+            consts::TAG_LOCAL_EXT => Err(CodecError::LocalExt),
+            consts::TAG_EXPORT_EXT => self.parse_export(reader),
+            consts::TAG_NEW_FUN_EXT => return self.start_fun(reader),
+            consts::TAG_RECORD_EXT => return self.start_record(reader),
             _ => Err(CodecError::UnknownTermTagByte { b: tag }),
+        }?;
+        Ok(Start::Value(value))
+    }
+
+    /// A frame just started: waiting if children follow, else finished.
+    fn open(&mut self, frame: Frame<'py>, reader: &mut Reader) -> CodecResult<Progress<'py>> {
+        let complete = match &frame {
+            Frame::List { remaining, .. }
+            | Frame::Tuple { remaining, .. }
+            | Frame::Map { remaining, .. }
+            | Frame::Fun { remaining, .. } => *remaining == 0,
+            Frame::Record { names, .. } => names.is_empty(),
+            Frame::ListTail { tail, .. } => tail.is_some(),
         };
+        if complete {
+            return self.finish(frame, reader);
+        }
+        Ok(Progress::Waiting(frame))
+    }
 
-        match result {
-            Ok(value) => {
-                // if type_name_ref is in decode_hook, call it
-                let type_name = value.get_type(self.py).name(self.py).into_owned();
-                let type_name_ref: &str = type_name.as_ref();
-                match &self.decode_hook.get_item(self.py, type_name_ref) {
-                    Some(ref h1) => {
-                        let repr1 = h1.call(self.py, (value,), None)?;
-                        Ok(repr1)
+    /// Give a frame its next child, in place; true once it has them all.
+    fn add_child(&mut self, frame: &mut Frame<'py>, value: Bound<'py, PyAny>) -> CodecResult<bool> {
+        match frame {
+            Frame::List {
+                list: items,
+                remaining,
+            }
+            | Frame::Tuple { items, remaining } => {
+                items.append(value)?;
+                *remaining = remaining.saturating_sub(1);
+                Ok(*remaining == 0)
+            }
+            Frame::Fun {
+                items, remaining, ..
+            } => {
+                items.push(value);
+                *remaining = remaining.saturating_sub(1);
+                Ok(*remaining == 0)
+            }
+            Frame::ListTail { tail, .. } => {
+                *tail = Some(value);
+                Ok(true)
+            }
+            Frame::Map {
+                key: slot @ None, ..
+            } => {
+                *slot = Some(value);
+                Ok(false)
+            }
+            Frame::Map {
+                dict,
+                key,
+                remaining,
+            } => {
+                let key = key
+                    .take()
+                    .ok_or(CodecError::BadValue("Map value without a key"))?;
+                let before = dict.len();
+                if let Err(error) = dict.set_item(&key, value) {
+                    if !error.is_instance_of::<PyTypeError>(self.py) {
+                        return Err(error.into());
                     }
-                    None => Ok(value),
+                    let type_name = key.get_type().name()?.to_string();
+                    return Err(CodecError::UnhashableKey { type_name, error });
                 }
+                if dict.len() == before {
+                    // Erlang's 1, 1.0 and true are three keys, Python's are
+                    // one: the dict would lose an entry without telling anyone.
+                    let type_name = key.get_type().name()?.to_string();
+                    return Err(CodecError::MapKeysCollide { type_name });
+                }
+                *remaining = remaining.saturating_sub(1);
+                Ok(*remaining == 0)
             }
-            Err(x) => Err(x),
-        }
-    }
-
-    /// Return cached value of atom class used for decoding. Otherwise if not
-    /// found - import and cache it locally.
-    fn get_atom_pyclass(&mut self) -> PyObject {
-        match &self.cached_atom_pyclass {
-            Some(ref a) => a.clone_ref(self.py),
-            None => {
-                let atom_m = self.py.import("term.atom").unwrap();
-                let atom_cls = match &self.atom_representation {
-                    AtomRepresentation::TermStrictAtom => {
-                        atom_m.get(self.py, "StrictAtom").unwrap()
-                    }
-                    _ => atom_m.get(self.py, "Atom").unwrap(),
-                };
-
-                self.cached_atom_pyclass = Some(atom_cls.clone_ref(self.py));
-                atom_cls
+            Frame::Record {
+                dict, names, next, ..
+            } => {
+                let field = names
+                    .get(*next)
+                    .ok_or(CodecError::BadValue("Record value past its fields"))?;
+                dict.set_item(field, value)?;
+                *next += 1;
+                Ok(*next == names.len())
             }
         }
     }
 
-    //  /// Return cached value of BitString class used for decoding. Otherwise if not
-    //  /// found - import and cache it locally.
-    //  fn get_bitstr_pyclass(&mut self) -> PyObject {
-    //    match &self.cached_bitstr_pyclass {
-    //      Some(ref a) => a.clone_ref(self.py),
-    //      None => {
-    //        let bitstr_m = self.py.import("term.bitstring").unwrap();
-    //        let bitstr_cls = bitstr_m.get(self.py, "BitString").unwrap();
-    //        self.cached_bitstr_pyclass = Some(bitstr_cls.clone_ref(self.py));
-    //        bitstr_cls
-    //      },
-    //    }
-    //  }
-
-    /// Return cached value of Pid class used for decoding. Otherwise if not
-    /// found - import and cache it locally.
-    fn get_pid_pyclass(&mut self) -> PyObject {
-        match &self.cached_pid_pyclass {
-            Some(ref a) => a.clone_ref(self.py),
-            None => {
-                let pid_m = self.py.import("term.pid").unwrap();
-                let pid_cls = pid_m.get(self.py, "Pid").unwrap();
-                self.cached_pid_pyclass = Some(pid_cls.clone_ref(self.py));
-                pid_cls
+    /// The value of a frame that has all its children; a list whose tail is
+    /// not NIL waits for its tail first.
+    fn finish(&mut self, frame: Frame<'py>, reader: &mut Reader) -> CodecResult<Progress<'py>> {
+        let value = match frame {
+            Frame::List { list, .. } => {
+                // A NIL tail makes a proper list. NIL is not a value of its
+                // own, so no decode hook sees it. Any other tail is decoded
+                // next.
+                if reader.peek()? != consts::TAG_NIL_EXT {
+                    return Ok(Progress::Waiting(Frame::ListTail { list, tail: None }));
+                }
+                reader.read_u8()?;
+                list.into_any()
             }
-        }
+            Frame::ListTail { list, tail } => {
+                let tail = tail.ok_or(CodecError::BadValue("list tail is missing"))?;
+                if list.is_empty() {
+                    // A zero-length list is its tail, already hooked:
+                    // <<108,0,0,0,0,97,42>> is 42 (binary_SUITE:robustness).
+                    return Ok(Progress::Done(tail, true));
+                }
+                let cls = self.classes.improper_list.bind(self.py);
+                cls.call1((list, tail))?
+            }
+            Frame::Tuple { items, .. } => items.to_tuple().into_any(),
+            Frame::Map { dict, .. } => dict.into_any(),
+            Frame::Fun { head, items, .. } => self.make_fun(*head, items)?,
+            Frame::Record { head, dict, .. } => self.make_record(*head, dict)?,
+        };
+        Ok(Progress::Done(value, false))
     }
 
-    /// Return cached value of Reference class used for decoding. Otherwise if not
-    /// found - import and cache it locally.
-    fn get_ref_pyclass(&mut self) -> PyObject {
-        match &self.cached_ref_pyclass {
-            Some(ref a) => a.clone_ref(self.py),
-            None => {
-                let ref_m = self.py.import("term.reference").unwrap();
-                let ref_cls = ref_m.get(self.py, "Reference").unwrap();
-                self.cached_ref_pyclass = Some(ref_cls.clone_ref(self.py));
-                ref_cls
-            }
+    /// NEW_FUN_EXT after its tag: the header and the four fixed parts are
+    /// read here, as OTP checks them (Module an atom, OldIndex and OldUniq
+    /// small integers, a creator pid); the free variables follow as children.
+    fn start_fun(&mut self, reader: &mut Reader) -> CodecResult<Start<'py>> {
+        let _size = reader.read_u32()?; // OTP ignores it too (TERM-05)
+        let arity = reader.read_u8()?;
+        let uniq = PyBytes::new(self.py, reader.read(16)?);
+        let index = reader.read_u32()?;
+        let num_free = reader.read_u32()? as usize;
+        if num_free > MAX_FUN_FREE {
+            return Err(CodecError::TooManyFree { count: num_free });
         }
+        if num_free > reader.remaining() {
+            return Err(CodecError::TooManyElements {
+                what: "NEW_FUN_EXT",
+                count: num_free,
+                remaining: reader.remaining(),
+            });
+        }
+        let module = self.decode_plain_atom(reader, "NEW_FUN_EXT module")?;
+        let old_index = read_small_int(reader, "NEW_FUN_EXT OldIndex")?;
+        let old_uniq = read_small_int(reader, "NEW_FUN_EXT OldUniq")?;
+        let pid = match reader.read_u8()? {
+            consts::TAG_PID_EXT => self.parse_pid(reader)?,
+            consts::TAG_NEW_PID_EXT => self.parse_new_pid(reader)?,
+            b => return Err(CodecError::FunPidNotAPid { b }),
+        };
+        Ok(Start::Open(Frame::Fun {
+            head: Box::new(FunHead {
+                arity,
+                uniq,
+                index,
+                module,
+                old_index,
+                old_uniq,
+                pid,
+            }),
+            items: items_for(num_free),
+            remaining: num_free,
+        }))
     }
 
-    /// Return cached value of Fun class used for decoding. Otherwise if not
-    /// found - import and cache it locally.
-    fn get_fun_pyclass(&mut self) -> PyObject {
-        match &self.cached_fun_pyclass {
-            Some(ref a) => a.clone_ref(self.py),
-            None => {
-                let fun_m = self.py.import("term.fun").unwrap();
-                let fun_cls = fun_m.get(self.py, "Fun").unwrap();
-                self.cached_fun_pyclass = Some(fun_cls.clone_ref(self.py));
-                fun_cls
+    /// RECORD_EXT after its tag: Flags, Module, Name and the field names are
+    /// read here, as OTP checks them (Flags 0 or 1, atoms, no field twice);
+    /// the values follow as children.
+    fn start_record(&mut self, reader: &mut Reader) -> CodecResult<Start<'py>> {
+        // Each field takes a name (2 bytes or more) and a value (1 or more).
+        let count = read_count(reader, false, 3, "RECORD_EXT")?;
+        let exported = match reader.read_u8()? {
+            0 => false,
+            1 => true,
+            flags => return Err(CodecError::BadRecordFlags { flags }),
+        };
+        let module = self.decode_plain_atom(reader, "RECORD_EXT module")?;
+        let name = self.decode_plain_atom(reader, "RECORD_EXT name")?;
+        let dict = PyDict::new(self.py);
+        let mut names = items_for(count);
+        for _ in 0..count {
+            let field = self.decode_plain_atom(reader, "RECORD_EXT field name")?;
+            if dict.contains(&field)? {
+                return Err(CodecError::DuplicateRecordField {
+                    field: field.str()?.to_string(),
+                });
             }
+            dict.set_item(&field, self.py.None())?;
+            names.push(field);
         }
+        Ok(Start::Open(Frame::Record {
+            head: Box::new(RecordHead {
+                module,
+                name,
+                exported,
+            }),
+            dict,
+            names,
+            next: 0,
+        }))
     }
 
-    fn get_improper_list_pyclass(&mut self) -> PyObject {
-        match &self.cached_improper_list_pyclass {
-            Some(ref l) => l.clone_ref(self.py),
-            None => {
-                let list_m = self.py.import("term.list").unwrap();
-                let improper_list_cls = list_m.get(self.py, "ImproperList").unwrap();
-                self.cached_improper_list_pyclass = Some(improper_list_cls.clone_ref(self.py));
-                improper_list_cls
-            }
-        }
+    /// Build a `term.record.Record` from its head and its fields.
+    fn make_record(
+        &mut self,
+        head: RecordHead<'py>,
+        fields: Bound<'py, PyDict>,
+    ) -> CodecResult<Bound<'py, PyAny>> {
+        let cls = self.classes.record.bind(self.py);
+        Ok(cls.call1((head.module, head.name, head.exported, fields))?)
+    }
+
+    /// Build a `term.fun.Fun` from its head and its free variables (a list).
+    fn make_fun(
+        &mut self,
+        head: FunHead<'py>,
+        free: Vec<Bound<'py, PyAny>>,
+    ) -> CodecResult<Bound<'py, PyAny>> {
+        let free_vars = PyList::new(self.py, free)?;
+        let fun_cls = self.classes.fun.bind(self.py);
+        Ok(fun_cls.call1((
+            head.module,
+            head.arity,
+            head.pid,
+            head.index,
+            head.uniq,
+            head.old_index,
+            head.old_uniq,
+            free_vars,
+        ))?)
     }
 
     #[inline]
-    fn parse_number<'inp, T>(&self, in_bytes: &mut Reader<'inp>) -> CodecResult<PyObject>
+    fn parse_number<T>(&self, in_bytes: &mut Reader) -> CodecResult<Bound<'py, PyAny>>
     where
-        T: ToPyObject + Readable,
+        T: IntoPyObject<'py> + Readable,
     {
         let val = in_bytes.read_with::<T>()?;
-        let py_val = val.to_py_object(self.py);
-        Ok(py_val.into_object())
+        Ok(val.into_bound_py_any(self.py)?)
     }
-
-    //  #[inline]
-    //  fn parse_bin_float<'inp>(&self, in_bytes: &'inp [u8]) -> CodecResult<(PyObject, &'inp [u8])>
-    //  {
-    //    let val = in_bytes[1];
-    //    let py_val = val.to_py_object(self.py);
-    //    Ok((py_val.into_object(), &in_bytes[2..]))
-    //  }
 
     /// Parses bytes after Atom tag (100) or Atom Utf8 (118)
-    /// Returns: Tuple (string | bytes | Atom object, remaining bytes)
+    /// Returns: string | bytes | Atom object
     #[inline]
-    fn parse_utf8_atom<T>(&mut self, reader: &mut Reader) -> CodecResult<PyObject>
+    fn parse_utf8_atom<T>(&mut self, reader: &mut Reader) -> CodecResult<Bound<'py, PyAny>>
     where
         usize: std::convert::From<T>,
         T: Readable,
     {
-        let sz = reader.read_with::<T>()?.into();
-        let txt = str::from_utf8(reader.read(sz)?)?;
-
-        let result = self.create_atom(txt)?.into_object();
-        Ok(result)
+        let txt = read_utf8_text::<T>(reader)?;
+        self.create_atom(&txt)
     }
 
     #[inline]
-    fn parse_latin1_atom<T>(&mut self, reader: &mut Reader) -> CodecResult<PyObject>
+    fn parse_latin1_atom<T>(&mut self, reader: &mut Reader) -> CodecResult<Bound<'py, PyAny>>
     where
         usize: std::convert::From<T>,
         T: Readable,
     {
-        let sz = reader.read_with::<T>()?.into();
-        let buf = reader.read(sz)?;
-        let result = if buf.is_ascii() {
-            let txt = unsafe { str::from_utf8_unchecked(buf) };
-            self.create_atom(txt)?.into_object()
-        } else {
-            let txt = buf
-                .iter()
-                .map(|c| char::from_u32(*c as u32).unwrap())
-                .collect::<String>();
-            self.create_atom(&txt)?.into_object()
+        let txt = read_latin1_text::<T>(reader)?;
+        self.create_atom(&txt)
+    }
+
+    /// The text an ATOM_CACHE_REF (its tag was read) stands for: entry
+    /// `AtomCacheReferenceIndex` of the "atom_cache" option.
+    fn atom_cache_text(&self, reader: &mut Reader) -> CodecResult<String> {
+        let index = usize::from(reader.read_u8()?);
+        let Some(cache) = &self.atom_cache else {
+            return Err(CodecError::NoAtomCache);
         };
-
-        Ok(result)
+        let len = cache.len()?;
+        if index >= len {
+            return Err(CodecError::AtomCacheIndex { index, len });
+        }
+        cache
+            .get_item(index)?
+            .extract::<String>()
+            .map_err(|_| CodecError::BadOptions {
+                txt: "'atom_cache' entries must be str".to_string(),
+            })
     }
 
-    // TODO: Make 3 functions and store fun pointer
     #[inline]
-    fn create_atom(&mut self, txt: &str) -> CodecResult<PyObject> {
+    fn create_atom(&mut self, txt: &str) -> CodecResult<Bound<'py, PyAny>> {
         match txt {
-            "true" => {
-                let t = PyBool::get(self.py, true);
-                return Ok(t.into_object());
-            }
-            "false" => {
-                let t = PyBool::get(self.py, false);
-                return Ok(t.into_object());
-            }
-            "undefined" => return Ok(self.py.None()),
+            "true" => return Ok(PyBool::new(self.py, true).to_owned().into_any()),
+            "false" => return Ok(PyBool::new(self.py, false).to_owned().into_any()),
+            "undefined" => return Ok(self.py.None().into_bound(self.py)),
             _ => {}
         }
 
+        if let Some(f) = &self.atom_call {
+            return Ok(f.call1((txt,))?);
+        }
         match self.atom_representation {
-            AtomRepresentation::Bytes => {
-                let py_bytes = PyBytes::new(self.py, txt.as_ref());
-                Ok(py_bytes.into_object())
+            AtomRepresentation::Bytes => Ok(PyBytes::new(self.py, txt.as_bytes()).into_any()),
+            AtomRepresentation::Str => Ok(txt.into_bound_py_any(self.py)?),
+            AtomRepresentation::TermStrictAtom => {
+                Ok(self.classes.strict_atom.bind(self.py).call1((txt,))?)
             }
-            AtomRepresentation::Str => {
-                // Return as a string
-                let py_txt = PyString::new(self.py, txt);
-                Ok(py_txt.into_object())
-            }
-            _ => {
-                // Construct Atom object (Note: performance cost)
-                let atom_obj = self.get_atom_pyclass();
-                Ok(atom_obj.call(self.py, (txt,), None)?)
-            }
-        } // match
+            AtomRepresentation::TermAtom => Ok(self.classes.atom.bind(self.py).call1((txt,))?),
+        }
     }
 
     #[inline]
@@ -354,254 +755,489 @@ impl<'a> Decoder<'a> {
         reader: &mut Reader,
         size: usize,
         sign: u8,
-    ) -> CodecResult<PyObject> {
+    ) -> CodecResult<Bound<'py, PyAny>> {
         let bin = reader.read(size)?;
         let data = PyBytes::new(self.py, bin);
-        let builtins = self.py.import("builtins")?;
-        let py_int = builtins.get(self.py, "int")?;
-        let val = py_int.call_method(self.py, "from_bytes", (data, "little"), None)?;
-        let val = if sign == 0 {
-            val
-        } else {
-            val.call_method(self.py, "__mul__", (-1,), None)?
-        };
-        Ok(val.into_object())
+        let py_int = self.py.get_type::<PyInt>();
+        let val = py_int.call_method1("from_bytes", (data, "little"))?;
+        let val = if sign == 0 { val } else { val.neg()? };
+        Ok(val)
     }
+
     /// Given input _after_ binary tag, parse remaining bytes
     #[inline]
-    fn parse_binary(&self, in_bytes: &mut Reader) -> CodecResult<PyObject> {
+    fn parse_binary(&self, in_bytes: &mut Reader) -> CodecResult<Bound<'py, PyAny>> {
         let sz = in_bytes.read_u32()? as usize;
         let bin = in_bytes.read(sz)?;
-        let py_bytes = PyBytes::new(self.py, bin);
-        Ok(py_bytes.into_object())
+        Ok(PyBytes::new(self.py, bin).into_any())
     }
 
-    /// Given input _after_ bit-string tag, parse remaining bytes and bit-count
+    /// Given input _after_ bit-string tag, parse remaining bytes and bit-count.
+    /// A whole last byte (8 bits) makes a binary, as OTP decodes it. Otherwise
+    /// the "bitstring" option picks `(bytes, last_byte_bits)` or `BitString`.
     #[inline]
-    fn parse_bitstring(&mut self, in_bytes: &mut Reader) -> CodecResult<PyObject> {
+    fn parse_bitstring(&mut self, in_bytes: &mut Reader) -> CodecResult<Bound<'py, PyAny>> {
         let sz = in_bytes.read_u32()? as usize;
         let last_byte_bits: u8 = in_bytes.read_u8()?;
+        helpers::check_bits(sz, last_byte_bits)?;
         let bin = in_bytes.read(sz)?;
-        let py_bytes = PyBytes::new(self.py, bin);
-
-        //    let py_bitstr_cls: PyObject = self.get_bitstr_pyclass();
-        //    let py_bitstr = py_bitstr_cls.call(self.py, (py_bytes, last_byte_bits), None)?;
-
-        //    Ok(py_bitstr.into_object())
-        let py_result = PyTuple::new(
-            self.py,
-            &[
-                py_bytes.into_object(),
-                last_byte_bits.to_py_object(self.py).into_object(),
-            ],
-        );
-        Ok(py_result.into_object())
+        if last_byte_bits == 8 {
+            return Ok(PyBytes::new(self.py, bin).into_any());
+        }
+        let py_bytes = PyBytes::new(self.py, &helpers::mask_last_byte(bin, last_byte_bits));
+        let py_bits = last_byte_bits.into_bound_py_any(self.py)?;
+        match self.bitstring_repr {
+            BitstringRepresentation::Tuple => {
+                Ok(PyTuple::new(self.py, [py_bytes.into_any(), py_bits])?.into_any())
+            }
+            BitstringRepresentation::BitString => {
+                let cls = self.classes.bitstring.bind(self.py);
+                Ok(cls.call1((py_bytes, py_bits))?)
+            }
+        }
     }
 
-    /// Given input _after_ string tag, parse remaining bytes as an ASCII string
+    /// Given input _after_ string tag, parse remaining bytes: one character
+    /// (code point 0..255, so Latin-1) per byte.
     #[inline]
-    fn parse_string(&self, reader: &mut Reader) -> CodecResult<PyObject> {
+    fn parse_string(&self, reader: &mut Reader) -> CodecResult<Bound<'py, PyAny>> {
         let sz = reader.read_u16()? as usize;
         let arr = reader.read(sz)?;
         let result = match self.bytestring_repr {
-            ByteStringRepresentation::Str => {
-                let rust_str = str::from_utf8(arr)?;
-                PyString::new(self.py, rust_str).into_object()
+            // ASCII is valid UTF-8 as it is: no conversion (TERM-25).
+            ByteStringRepresentation::Str if arr.is_ascii() => {
+                PyString::new(self.py, str::from_utf8(arr)?).into_any()
             }
-            ByteStringRepresentation::Bytes => PyBytes::new(self.py, arr).into_object(),
+            // CPython's Latin-1 decoder: one copy, where building UTF-8 for
+            // PyString::new took twenty times as long.
+            ByteStringRepresentation::Str => PyBytes::new(self.py, arr)
+                .call_method1(intern!(self.py, "decode"), (intern!(self.py, "latin-1"),))?,
+            ByteStringRepresentation::Bytes => PyBytes::new(self.py, arr).into_any(),
             ByteStringRepresentation::IntList => {
-                let lst: Vec<_> = arr
-                    .iter()
-                    .map(|n| n.to_py_object(self.py).into_object())
-                    .collect();
-                PyList::new(self.py, lst.as_ref()).into_object()
+                PyList::new(self.py, arr.iter().copied())?.into_any()
             }
         };
-
         Ok(result)
     }
 
-    /// Given input _after_ the list tag, parse the list elements and tail
-    #[inline]
-    fn parse_list(&mut self, reader: &mut Reader) -> CodecResult<PyObject> {
-        let sz = reader.read_u32()? as usize;
-
-        let mut lst = Vec::<PyObject>::with_capacity(sz);
-
-        // Read list elements, one by one
-        for _i in 0..sz {
-            let val = self.decode(reader)?;
-            lst.push(val);
-        }
-
-        let py_lst = PyList::new(self.py, lst.as_ref());
-
-        // Check whether last element is a NIL, or something else
-        if reader.peek()? == consts::TAG_NIL_EXT {
-            reader.read_u8().unwrap();
-            // We are looking at a proper list, so just return the result
-            Ok(py_lst.into_object())
-        } else {
-            // We are looking at an improper list
-            let tail_val = self.decode(reader)?;
-            let improper_list_cls = self.get_improper_list_pyclass();
-            let improper_list = improper_list_cls.call(self.py, (py_lst, tail_val), None)?;
-            Ok(improper_list.into_object())
-        }
+    /// Decode the node name of a pid, port or reference.
+    fn decode_node_name(&mut self, reader: &mut Reader) -> CodecResult<Bound<'py, PyAny>> {
+        self.decode_plain_atom(reader, "Node name")
     }
 
-    /// Given input _after_ the TAG_MAP_EXT byte, parse map key/value pairs.
-    #[inline]
-    fn parse_map(&mut self, reader: &mut Reader) -> CodecResult<PyObject> {
-        let arity = reader.read_u32()? as usize;
-
-        let result = PyDict::new(self.py);
-
-        // Read key/value pairs two at a time
-        for _i in 0..arity {
-            let py_key = self.decode(reader)?;
-            let py_val = self.decode(reader)?;
-            result.set_item(self.py, py_key, py_val).unwrap();
-        }
-
-        Ok(result.into_object())
+    /// Decode an atom that is part of another term (`what`): always a
+    /// `term.atom.Atom`, `true` and `false` too, whatever the options and
+    /// hooks say. Anything but an atom is an error.
+    fn decode_plain_atom(
+        &mut self,
+        reader: &mut Reader,
+        what: &'static str,
+    ) -> CodecResult<Bound<'py, PyAny>> {
+        let tag = reader.read_u8()?;
+        let txt = match tag {
+            consts::TAG_ATOM_EXT => read_latin1_text::<u16>(reader)?,
+            consts::TAG_ATOM_UTF8_EXT => read_utf8_text::<u16>(reader)?,
+            consts::TAG_SMALL_ATOM_EXT => read_latin1_text::<u8>(reader)?,
+            consts::TAG_SMALL_ATOM_UTF8_EXT => read_utf8_text::<u8>(reader)?,
+            consts::TAG_ATOM_CACHE_REF => Cow::Owned(self.atom_cache_text(reader)?),
+            _ => return Err(CodecError::NotAnAtom { what, b: tag }),
+        };
+        Ok(self.classes.atom.bind(self.py).call1((txt,))?)
     }
 
-    /// Given input _after_ the TAG_SMALL_TUPLE_EXT or the TAG_TUPLE_EXT byte,
-    /// tuple elements into a vector and create Python tuple.
+    /// Given input _after_ the PID tag byte, parse an external pid. ID and
+    /// Serial are not limited for a remote node (OTP 29's dec_pid checks them
+    /// only for its own pids); Creation is.
     #[inline]
-    fn parse_tuple(&mut self, reader: &mut Reader, arity: usize) -> CodecResult<PyObject> {
-        let mut result = Vec::<PyObject>::with_capacity(arity);
-
-        // Read values one by one
-        for _i in 0..arity {
-            let py_val = self.decode(reader)?;
-            result.push(py_val);
-        }
-
-        let py_result = PyTuple::new(self.py, result.as_ref());
-        Ok(py_result.into_object())
-    }
-
-    /// Given input _after_ the PID tag byte, parse an external pid
-    #[inline]
-    fn parse_pid(&mut self, reader: &mut Reader) -> CodecResult<PyObject> {
-        // Temporarily switch atom representation to binary and then decode node
-        let save_repr = self.atom_representation;
-        self.atom_representation = AtomRepresentation::Str;
-        let node = self.decode(reader)?;
-        self.atom_representation = save_repr;
+    fn parse_pid(&mut self, reader: &mut Reader) -> CodecResult<Bound<'py, PyAny>> {
+        let node = self.decode_node_name(reader)?;
 
         let id: u32 = reader.read_u32()?;
         let serial: u32 = reader.read_u32()?;
-        let creation: u8 = reader.read_u8()?;
+        let creation = read_tiny_creation(reader, "PID_EXT")?;
 
-        let pid_obj = self.get_pid_pyclass();
-        let py_pid = pid_obj.call(self.py, (node, id, serial, creation), None)?;
-        Ok(py_pid.into_object())
+        let pid_cls = self.classes.pid.bind(self.py);
+        Ok(pid_cls.call1((node, id, serial, creation))?)
     }
 
     /// Given input _after_ the NEW_PID tag byte, parse an external pid
     #[inline]
-    fn parse_new_pid(&mut self, reader: &mut Reader) -> CodecResult<PyObject> {
-        // Temporarily switch atom representation to binary and then decode node
-        let save_repr = self.atom_representation;
-        self.atom_representation = AtomRepresentation::Str;
-        let node = self.decode(reader)?;
-        self.atom_representation = save_repr;
+    fn parse_new_pid(&mut self, reader: &mut Reader) -> CodecResult<Bound<'py, PyAny>> {
+        let node = self.decode_node_name(reader)?;
 
         let id: u32 = reader.read_u32()?;
         let serial: u32 = reader.read_u32()?;
         let creation: u32 = reader.read_u32()?;
 
-        let pid_obj = self.get_pid_pyclass();
-        let py_pid = pid_obj.call(self.py, (node, id, serial, creation), None)?;
-        Ok(py_pid.into_object())
+        let pid_cls = self.classes.pid.bind(self.py);
+        Ok(pid_cls.call1((node, id, serial, creation))?)
     }
 
-    /// Given input _after_ the Reference tag byte, parse an external reference
-    #[inline]
-    fn parse_ref(&mut self, reader: &mut Reader) -> CodecResult<PyObject> {
-        let term_len = reader.read_u16()? as usize;
-
-        // Temporarily switch atom representation to binary and then decode node
-        let save_repr = self.atom_representation;
-        self.atom_representation = AtomRepresentation::Str;
-        let node = self.decode(reader)?;
-        self.atom_representation = save_repr;
-
-        let creation: u8 = reader.read_u8()?;
-
-        let id: &[u8] = reader.read(term_len * 4)?;
-        let bytes_id = PyBytes::new(self.py, id);
-
-        let ref_obj = self.get_ref_pyclass();
-        let py_ref = ref_obj.call(self.py, (node, creation, bytes_id), None)?;
-        Ok(py_ref.into_object())
+    /// Given input _after_ the EXPORT_EXT tag byte: Module, Function, Arity.
+    fn parse_export(&mut self, reader: &mut Reader) -> CodecResult<Bound<'py, PyAny>> {
+        let module = self.decode_plain_atom(reader, "EXPORT_EXT module")?;
+        let function = self.decode_plain_atom(reader, "EXPORT_EXT function")?;
+        let arity = read_export_arity(reader)?;
+        let cls = self.classes.export.bind(self.py);
+        Ok(cls.call1((module, function, arity))?)
     }
 
-    /// Given input _after_ the Newer Reference tag byte, parse an external reference
-    #[inline]
-    fn parse_newer_ref(&mut self, reader: &mut Reader) -> CodecResult<PyObject> {
-        let term_len = reader.read_u16()? as usize;
+    /// Given input _after_ a port tag byte (PORT_EXT, NEW_PORT_EXT or
+    /// V4_PORT_EXT), parse a port: 32-bit id except in V4_PORT_EXT (64);
+    /// 8-bit creation, at most 3, in PORT_EXT, else 32.
+    fn parse_port(&mut self, reader: &mut Reader, tag: u8) -> CodecResult<Bound<'py, PyAny>> {
+        let node = self.decode_node_name(reader)?;
+        let id: u64 = if tag == consts::TAG_V4_PORT_EXT {
+            reader.read_u64()?
+        } else {
+            u64::from(reader.read_u32()?)
+        };
+        let creation: u32 = if tag == consts::TAG_PORT_EXT {
+            u32::from(read_tiny_creation(reader, "PORT_EXT")?)
+        } else {
+            reader.read_u32()?
+        };
+        let port_cls = self.classes.port.bind(self.py);
+        Ok(port_cls.call1((node, id, creation))?)
+    }
 
-        // Temporarily switch atom representation to binary and then decode node
-        let save_repr = self.atom_representation;
-        self.atom_representation = AtomRepresentation::Str;
-        let node = self.decode(reader)?;
-        self.atom_representation = save_repr;
+    /// Given input _after_ the REFERENCE_EXT tag byte (deprecated): Node,
+    /// one ID word of 18 bits, 8-bit Creation.
+    fn parse_old_ref(&mut self, reader: &mut Reader) -> CodecResult<Bound<'py, PyAny>> {
+        let node = self.decode_node_name(reader)?;
+        let id = first_ref_word(reader.read(4)?, "REFERENCE_EXT")?;
+        let creation = u32::from(read_tiny_creation(reader, "REFERENCE_EXT")?);
+        self.make_ref(node, creation, id)
+    }
 
+    /// Given input _after_ the NEW_REFERENCE_EXT tag byte: Len, Node, 8-bit
+    /// Creation, Len ID words, the first of 18 bits.
+    fn parse_ref(&mut self, reader: &mut Reader) -> CodecResult<Bound<'py, PyAny>> {
+        let words = read_ref_words(reader, "NEW_REFERENCE_EXT")?;
+        let node = self.decode_node_name(reader)?;
+        let creation = u32::from(read_tiny_creation(reader, "NEW_REFERENCE_EXT")?);
+        let id = first_ref_word(reader.read(words * 4)?, "NEW_REFERENCE_EXT")?;
+        self.make_ref(node, creation, id)
+    }
+
+    /// Given input _after_ the NEWER_REFERENCE_EXT tag byte: Len, Node,
+    /// 32-bit Creation, Len ID words.
+    fn parse_newer_ref(&mut self, reader: &mut Reader) -> CodecResult<Bound<'py, PyAny>> {
+        let words = read_ref_words(reader, "NEWER_REFERENCE_EXT")?;
+        let node = self.decode_node_name(reader)?;
         let creation: u32 = reader.read_u32()?;
-
-        let id: &[u8] = reader.read(term_len * 4)?;
-        let bytes_id = PyBytes::new(self.py, id);
-
-        let ref_obj = self.get_ref_pyclass();
-        let py_ref = ref_obj.call(self.py, (node, creation, bytes_id), None)?;
-        Ok(py_ref.into_object())
+        let id = reader.read(words * 4)?;
+        self.make_ref(node, creation, id)
     }
 
-    /// Given input _after_ the Fun tag byte, parse a fun (not useful in Python
-    /// but we store all parts of it and can reconstruct it, if it will be sent out)
-    #[inline]
-    fn parse_fun(&mut self, reader: &mut Reader) -> CodecResult<PyObject> {
-        let _size = reader.read_u32()?;
-        let arity = reader.read_u8()? as usize;
-
-        let uniq_md5 = reader.read(16)?;
-
-        let index = reader.read_u32()?;
-        let num_free = reader.read_u32()?;
-
-        let module = self.decode(reader)?;
-        let old_index = self.decode(reader)?;
-        let old_uniq = self.decode(reader)?;
-        let pid = self.decode(reader)?;
-
-        // Decode num_free free variables following after pid
-        let mut frozen_vars = Vec::<PyObject>::with_capacity(arity);
-        for _i in 0..num_free {
-            let py_val = self.decode(reader)?;
-            frozen_vars.push(py_val);
-        }
-        let py_frozen_vars = PyTuple::new(self.py, frozen_vars.as_ref());
-
-        let fun_obj = self.get_fun_pyclass();
-        let py_fun = fun_obj.call(
-            self.py,
-            (
-                module,
-                arity,
-                pid,
-                index,
-                uniq_md5,
-                old_index,
-                old_uniq,
-                py_frozen_vars.into_object(),
-            ),
-            None,
-        )?;
-        Ok(py_fun.into_object())
+    fn make_ref(
+        &mut self,
+        node: Bound<'py, PyAny>,
+        creation: u32,
+        id: &[u8],
+    ) -> CodecResult<Bound<'py, PyAny>> {
+        let bytes_id = PyBytes::new(self.py, id);
+        let ref_cls = self.classes.reference.bind(self.py);
+        Ok(ref_cls.call1((node, creation, bytes_id))?)
     }
 }
 // end impl
+
+/// `value` if it is finite: Erlang has no NaN or infinity.
+fn finite(value: f64) -> CodecResult<f64> {
+    if !value.is_finite() {
+        return Err(CodecError::NonFiniteFloat { f: value });
+    }
+    Ok(value)
+}
+
+/// The value of FLOAT_EXT's 31 bytes: `"%.20e"` text ended by a NUL (OTP
+/// would read past the term to find one; we require it here). The text must
+/// be as OTP's sys_chars_to_double accepts it: sign, digits, '.' or ',',
+/// digits, optional exponent. An overflow is infinite and rejected; an
+/// underflow is 0.0 or subnormal and accepted, as in OTP.
+fn float_ext_value(raw: &[u8]) -> CodecResult<f64> {
+    let text = raw
+        .iter()
+        .position(|&b| b == 0)
+        .and_then(|end| raw.get(..end))
+        .filter(|t| is_float_text(t))
+        .ok_or(CodecError::BadFloatText)?;
+    let text: String = text
+        .iter()
+        .map(|&b| if b == b',' { '.' } else { char::from(b) })
+        .collect();
+    finite(text.parse().map_err(|_| CodecError::BadFloatText)?)
+}
+
+/// `[+-]?[0-9]+[.,][0-9]+([eE][+-]?[0-9]+)?`, the whole of `t`.
+fn is_float_text(t: &[u8]) -> bool {
+    fn sign(t: &[u8], i: usize) -> usize {
+        if matches!(t.get(i), Some(b'+' | b'-')) {
+            i + 1
+        } else {
+            i
+        }
+    }
+    /// Past the digits at `i`, or None if there are none.
+    fn digits(t: &[u8], i: usize) -> Option<usize> {
+        let n = t
+            .get(i..)?
+            .iter()
+            .take_while(|b| b.is_ascii_digit())
+            .count();
+        (n > 0).then_some(i + n)
+    }
+    let Some(i) = digits(t, sign(t, 0)) else {
+        return false;
+    };
+    if !matches!(t.get(i), Some(b'.' | b',')) {
+        return false;
+    }
+    let Some(mut i) = digits(t, i + 1) else {
+        return false;
+    };
+    if matches!(t.get(i), Some(b'e' | b'E')) {
+        match digits(t, sign(t, i + 1)) {
+            Some(end) => i = end,
+            None => return false,
+        }
+    }
+    i == t.len()
+}
+
+/// Read the 8-bit Creation of an old node-container tag: at most 3
+/// (`is_tiny_creation` in OTP's external.c).
+fn read_tiny_creation(reader: &mut Reader, what: &'static str) -> CodecResult<u8> {
+    let creation = reader.read_u8()?;
+    if creation > consts::MAX_TINY_CREATION {
+        return Err(CodecError::BadCreation { what, creation });
+    }
+    Ok(creation)
+}
+
+/// Range of a small integer on a 64-bit OTP emulator (MIN_SMALL, MAX_SMALL):
+/// what OTP accepts for the integer fields of EXPORT_EXT and NEW_FUN_EXT.
+pub const MIN_SMALL: i64 = -(1 << 59);
+pub const MAX_SMALL: i64 = (1 << 59) - 1;
+
+/// Most free variables of a fun (MAX_ARG in OTP).
+pub const MAX_FUN_FREE: usize = 255;
+
+/// Read an integer field of another term (`what`) that OTP decodes as a
+/// whole term and requires to be small: any integer encoding is accepted.
+fn read_small_int(reader: &mut Reader, what: &'static str) -> CodecResult<i64> {
+    let tag = reader.read_u8()?;
+    match tag {
+        consts::TAG_SMALL_UINT => Ok(i64::from(reader.read_u8()?)),
+        consts::TAG_INT => Ok(i64::from(reader.read_i32()?)),
+        consts::TAG_SMALL_BIG_EXT | consts::TAG_LARGE_BIG_EXT => {
+            let size = if tag == consts::TAG_SMALL_BIG_EXT {
+                usize::from(reader.read_u8()?)
+            } else {
+                reader.read_u32()? as usize
+            };
+            let negative = reader.read_u8()? != 0;
+            let magnitude = small_magnitude(reader.read(size)?, what)?;
+            let value = if negative {
+                -i128::from(magnitude)
+            } else {
+                i128::from(magnitude)
+            };
+            if value < i128::from(MIN_SMALL) || value > i128::from(MAX_SMALL) {
+                return Err(CodecError::IntegerRange { what });
+            }
+            i64::try_from(value).map_err(|_| CodecError::IntegerRange { what })
+        }
+        _ => Err(CodecError::NotAnInteger { what, b: tag }),
+    }
+}
+
+/// Read the Arity of EXPORT_EXT: a non-negative small integer (OTP 29
+/// accepts INTEGER_EXT and bignums too).
+fn read_export_arity(reader: &mut Reader) -> CodecResult<u64> {
+    let what = "EXPORT_EXT arity";
+    u64::try_from(read_small_int(reader, what)?).map_err(|_| CodecError::IntegerRange { what })
+}
+
+/// The value of little-endian bignum digits, if it fits 64 bits.
+fn small_magnitude(digits: &[u8], what: &'static str) -> CodecResult<u64> {
+    let mut value = 0u64;
+    for (i, &d) in digits.iter().enumerate() {
+        if d == 0 {
+            continue;
+        }
+        if i >= 8 {
+            return Err(CodecError::IntegerRange { what });
+        }
+        value |= u64::from(d) << (8 * i);
+    }
+    Ok(value)
+}
+
+/// Read the ID word count of a reference: 1 to 5 (`ERTS_MAX_REF_NUMBERS`).
+/// OTP 29 also decodes a NEWER_REFERENCE_EXT with no words, but only by
+/// reading its first word from beyond the term; we reject it.
+fn read_ref_words(reader: &mut Reader, what: &'static str) -> CodecResult<usize> {
+    let words = reader.read_u16()?;
+    if !(1..=consts::MAX_REF_WORDS).contains(&words) {
+        return Err(CodecError::BadRefWords { what, words });
+    }
+    Ok(usize::from(words))
+}
+
+/// `id` if its first word fits the 18 bits that the tags with an 8-bit
+/// creation allow (`MAX_REFERENCE` in OTP).
+fn first_ref_word<'a>(id: &'a [u8], what: &'static str) -> CodecResult<&'a [u8]> {
+    match id.first_chunk::<4>() {
+        Some(word) if u32::from_be_bytes(*word) < consts::MAX_OLD_REF_FIRST_WORD => Ok(id),
+        _ => Err(CodecError::BadRefFirstWord { what }),
+    }
+}
+
+/// Read the length (a `T`) and the UTF-8 text of an atom.
+fn read_utf8_text<'a, T>(reader: &mut Reader<'a>) -> CodecResult<Cow<'a, str>>
+where
+    usize: std::convert::From<T>,
+    T: Readable,
+{
+    let sz = reader.read_with::<T>()?.into();
+    let text = str::from_utf8(reader.read(sz)?)?;
+    check_atom_chars(text.chars().count())?;
+    Ok(Cow::Borrowed(text))
+}
+
+/// An atom has at most 255 characters (MAX_ATOM_CHARACTERS in OTP).
+pub fn check_atom_chars(chars: usize) -> CodecResult<()> {
+    if chars > consts::MAX_ATOM_CHARS {
+        return Err(CodecError::AtomTooLong { chars });
+    }
+    Ok(())
+}
+
+/// Read the length (a `T`) and the Latin-1 text of an atom.
+fn read_latin1_text<'a, T>(reader: &mut Reader<'a>) -> CodecResult<Cow<'a, str>>
+where
+    usize: std::convert::From<T>,
+    T: Readable,
+{
+    let sz = reader.read_with::<T>()?.into();
+    let buf = reader.read(sz)?;
+    check_atom_chars(buf.len())?;
+    if buf.is_ascii() {
+        Ok(Cow::Borrowed(str::from_utf8(buf)?))
+    } else {
+        Ok(Cow::Owned(buf.iter().map(|c| char::from(*c)).collect()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        first_ref_word, float_ext_value, inflate, read_export_arity, read_ref_words,
+        read_tiny_creation, MAX_SMALL,
+    };
+
+    #[test]
+    fn float_ext_text() {
+        let mut raw = b"1.50000000000000000000e+00".to_vec();
+        raw.resize(31, 0);
+        assert_eq!(float_ext_value(&raw).unwrap(), 1.5);
+        for good in [&b"-2,5\0"[..], b"+3.0E-2\0xyz", b"1.0e-400\0"] {
+            assert!(float_ext_value(good).is_ok(), "{good:?}");
+        }
+        for bad in [
+            &b"1.5"[..],
+            b"1e5\0",
+            b".5\0",
+            b"1.\0",
+            b"1.5e\0",
+            b"1.5 \0",
+            b"nan\0",
+            b"1.0e400\0",
+            b"\0",
+        ] {
+            assert!(float_ext_value(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn export_arity_encodings() {
+        let arity = |b: &[u8]| read_export_arity(&mut Reader::from(b));
+        assert_eq!(arity(&[97, 2]).unwrap(), 2);
+        assert_eq!(arity(&[98, 0, 0, 1, 0]).unwrap(), 256);
+        assert!(arity(&[98, 255, 255, 255, 255]).is_err());
+        // A bignum with high zero digits is still small; -0 is 0.
+        assert_eq!(arity(&[110, 9, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0]).unwrap(), 2);
+        assert_eq!(arity(&[110, 1, 1, 0]).unwrap(), 0);
+        assert!(arity(&[110, 1, 1, 2]).is_err());
+        let max = MAX_SMALL.to_le_bytes();
+        let mut big = vec![110, 8, 0];
+        big.extend(max);
+        assert_eq!(arity(&big).unwrap(), MAX_SMALL as u64);
+        big[10] += 1; // 2^59 - 1 + 2^56
+        assert!(arity(&big).is_err());
+        assert!(arity(&[106]).is_err());
+    }
+    use crate::errors::CodecError;
+    use crate::reader::Reader;
+
+    #[test]
+    fn node_container_limits() {
+        let ok: &[u8] = &[3, 0, 1, 0, 5];
+        let mut r = Reader::from(ok);
+        assert_eq!(read_tiny_creation(&mut r, "t").unwrap(), 3);
+        assert_eq!(read_ref_words(&mut r, "t").unwrap(), 1);
+        assert_eq!(read_ref_words(&mut r, "t").unwrap(), 5);
+        let bad: &[u8] = &[4, 0, 0, 0, 6];
+        let mut r = Reader::from(bad);
+        assert!(read_tiny_creation(&mut r, "t").is_err());
+        assert!(read_ref_words(&mut r, "t").is_err());
+        assert!(read_ref_words(&mut r, "t").is_err());
+        assert!(first_ref_word(&[0, 3, 255, 255], "t").is_ok());
+        assert!(first_ref_word(&[0, 4, 0, 0], "t").is_err());
+        assert!(first_ref_word(&[], "t").is_err());
+    }
+    use flate2::{write::ZlibEncoder, Compression};
+    use std::io::Write;
+
+    fn deflate(data: &[u8]) -> Vec<u8> {
+        let mut e = ZlibEncoder::new(Vec::new(), Compression::default());
+        e.write_all(data).unwrap();
+        e.finish().unwrap()
+    }
+
+    #[test]
+    fn inflate_needs_exact_size_and_whole_stream() {
+        let data = vec![7u8; 100_000];
+        let z = deflate(&data);
+        assert_eq!(inflate(&z, data.len(), usize::MAX).unwrap(), data);
+        assert!(matches!(
+            inflate(&z, data.len() - 1, usize::MAX),
+            Err(CodecError::CompressedSizeMismatch)
+        ));
+        assert!(matches!(
+            inflate(&z, data.len() + 1, usize::MAX),
+            Err(CodecError::CompressedSizeMismatch)
+        ));
+        // The Adler-32 trailer cut off.
+        assert!(matches!(
+            inflate(&z[..z.len() - 2], data.len(), usize::MAX),
+            Err(CodecError::CompressedIncomplete)
+        ));
+        assert!(matches!(
+            inflate(&z, data.len(), data.len() - 1),
+            Err(CodecError::CompressedTooLarge { .. })
+        ));
+    }
+
+    #[test]
+    fn inflate_stops_a_bomb_early() {
+        // 64 MiB of zeros declared as 1 KiB: fails after about one chunk.
+        let z = deflate(&vec![0u8; 64 * 1024 * 1024]);
+        assert!(matches!(
+            inflate(&z, 1024, usize::MAX),
+            Err(CodecError::CompressedSizeMismatch)
+        ));
+    }
+}

@@ -1,27 +1,28 @@
-import unittest
-import term.native_codec_impl as nativecodec
+"""Tests of the native codec module alone; skipped when it is not built."""
+
+from types import ModuleType
+
+import pytest
+
 import term.py_codec_impl as pycodec
 from term.atom import Atom
 
 
-class TestNativeCodecDriver(unittest.TestCase):
-    def test_simple_b2t_errors(self):
-        with self.assertRaises(BaseException):
-            nativecodec.binary_to_term(b'xxx', None)
-            # Empty term creates empty input error
-            nativecodec.binary_to_term(b'', None)
-
-    def test_b2t_read_errors(self):
-        with self.assertRaises(BaseException):
-            # Compressed term (131, 80) with incomplete length field
-            # should create read error
-            nativecodec.binary_to_term(b'\x83\x50\x00', None)
-
-    def test_b2t_library_equality_atoms(self):
-        a = pycodec.term_to_binary(Atom("hello"))
-        (b, _) = nativecodec.binary_to_term(a, None)
-        self.assertEqual(Atom("hello"), b)
+def test_simple_b2t_errors(native_codec: ModuleType) -> None:
+    with pytest.raises(BaseException):
+        native_codec.binary_to_term(b"xxx", None)
+        # Empty term creates empty input error
+        native_codec.binary_to_term(b"", None)
 
 
-if __name__ == '__main__':
-    unittest.main()
+def test_b2t_read_errors(native_codec: ModuleType) -> None:
+    with pytest.raises(BaseException):
+        # Compressed term (131, 80) with incomplete length field
+        # should create read error
+        native_codec.binary_to_term(b"\x83\x50\x00", None)
+
+
+def test_b2t_library_equality_atoms(native_codec: ModuleType) -> None:
+    a = pycodec.term_to_binary(Atom("hello"))
+    b, _ = native_codec.binary_to_term(a, None)
+    assert Atom("hello") == b

@@ -1,18 +1,24 @@
-from typing import Union, List, Any
+"""Base classes of the term classes, and the type ``Term`` of a decoded
+value."""
+
+from typing import Any, List, Union
 
 
 class BaseTerm:
-    """ Base class for all Erlang terms. """
+    """Base class for all Erlang terms."""
+
     pass
 
 
 class BasePid(BaseTerm):
-    """ Serves as a base for local pid and remote pid. """
+    """Serves as a base for local pid and remote pid."""
+
     pass
 
 
 class BaseRef(BaseTerm):
-    """ Serves as a base for local ref and remote ref. """
+    """Serves as a base for local ref and remote ref."""
+
     pass
 
 

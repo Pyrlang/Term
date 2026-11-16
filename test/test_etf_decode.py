@@ -1,694 +1,2045 @@
-import unittest
+"""Decoding tests; each runs against the Python and the native codec."""
+
+import copy
 import sys
+from pathlib import Path
+from types import ModuleType
+from typing import Any
+
+import pytest
 
 from term import py_codec_impl as py_impl
-import term.native_codec_impl as native_impl
 from term.atom import Atom, StrictAtom
-from term.pid import Pid
-from term.reference import Reference
-from term.fun import Fun
+from term.bitstring import BitString
+from term.fun import Export, Fun
 from term.list import ImproperList, list_to_unicode_str
+from term.pid import Pid
+from term.port import Port
+from term.record import Record
+from term.reference import Reference
+
+# The golden fixtures written by OTP (TERM-03).
+FIXTURE_DIR = Path(__file__).parent / "fixtures"
+
+# Sentinel used to verify that post-decoded tails are preserved properly
+EXPECTED_TAIL_BYTES = bytes([1, 2, 3, 4, 5])
 
 
-class TestETFDecode(unittest.TestCase):
-    # Sentinel used to verify that post-decoded tails are preserved properly
-    EXPECTED_TAIL_BYTES = bytes([1, 2, 3, 4, 5])
+def _etf_bytes(b: bytes | list[int]) -> bytes:
+    return bytes(b) + EXPECTED_TAIL_BYTES
 
-    def _etf_bytes(self, b):
-        return bytes(b) + self.EXPECTED_TAIL_BYTES
 
-    def assertExpectedTail(self, tail):
-        self.assertEqual(tail, self.EXPECTED_TAIL_BYTES)
+def _assert_expected_tail(tail: bytes) -> None:
+    assert tail == EXPECTED_TAIL_BYTES
 
-    def test_decode_atom_py(self):
-        self._decode_atom(py_impl)
-        self._decode_atom_utf8(py_impl)
 
-    def test_decode_atom_native(self):
-        self._decode_atom(native_impl)
-        self._decode_atom_utf8(native_impl)
+def test_decode_atom(codec: ModuleType) -> None:
+    """Try an atom 'hello' encoded as Latin1 atom (16-bit length)
+    or small atom (8bit length)
+    """
+    b1 = _etf_bytes([131, py_impl.TAG_ATOM_EXT, 0, 5, 104, 101, 108, 108, 111])
+    t1, tail1 = codec.binary_to_term(b1, None)
+    assert isinstance(t1, Atom), "Result must be Atom object"
+    assert t1 == "hello"
+    _assert_expected_tail(tail1)
 
-    def _decode_atom(self, codec):
-        """ Try an atom 'hello' encoded as Latin1 atom (16-bit length)
-            or small atom (8bit length)
-        """
-        b1 = self._etf_bytes([131, py_impl.TAG_ATOM_EXT,
-                              0, 5,
-                              104, 101, 108, 108, 111])
-        (t1, tail1) = codec.binary_to_term(b1, None)
-        self.assertTrue(isinstance(t1, Atom), "Result must be Atom object")
-        self.assertEqual(t1, "hello")
-        self.assertExpectedTail(tail1)
+    b2 = _etf_bytes([131, py_impl.TAG_SMALL_ATOM_EXT, 5, 104, 101, 108, 108, 111])
+    t2, tail2 = codec.binary_to_term(b2, None)
+    assert isinstance(t2, Atom), "Result must be Atom object"
+    assert t2 == "hello"
+    _assert_expected_tail(tail2)
 
-        b2 = self._etf_bytes([131, py_impl.TAG_SMALL_ATOM_EXT,
-                              5,
-                              104, 101, 108, 108, 111])
-        (t2, tail2) = codec.binary_to_term(b2, None)
-        self.assertTrue(isinstance(t2, Atom), "Result must be Atom object")
-        self.assertEqual(t2, "hello")
-        self.assertExpectedTail(tail2)
 
-    def _decode_atom_utf8(self, codec):
-        b1 = self._etf_bytes([131, py_impl.TAG_ATOM_UTF8_EXT,
-                              0, 6,
-                              108, 195, 164, 103, 101, 116])
-        (t1, tail1) = codec.binary_to_term(b1, None)
-        self.assertTrue(isinstance(t1, Atom), "Result must be Atom object")
-        self.assertTrue(isinstance(t1, str), "Result must be str")
-        self.assertEqual(t1, u"läget")
-        self.assertExpectedTail(tail1)
+def test_decode_atom_utf8(codec: ModuleType) -> None:
+    b1 = _etf_bytes(
+        [131, py_impl.TAG_ATOM_UTF8_EXT, 0, 6, 108, 195, 164, 103, 101, 116]
+    )
+    t1, tail1 = codec.binary_to_term(b1, None)
+    assert isinstance(t1, Atom), "Result must be Atom object"
+    assert isinstance(t1, str), "Result must be str"
+    assert t1 == "läget"
+    _assert_expected_tail(tail1)
 
-    # ----------------
 
-    def test_decode_atom_as_string_py(self):
-        self._decode_atom_as_string(py_impl)
+def test_decode_atom_as_string(codec: ModuleType) -> None:
+    """Try an atom 'hello' to a Python string"""
+    b1 = _etf_bytes([131, py_impl.TAG_ATOM_EXT, 0, 5, 104, 101, 108, 108, 111])
+    t2, tail2 = codec.binary_to_term(b1, {"atom": "str"})
+    assert isinstance(t2, str), "Expected str, have: " + t2.__class__.__name__
+    assert t2 == "hello"
+    _assert_expected_tail(tail2)
 
-    def test_decode_atom_as_string_native(self):
-        self._decode_atom_as_string(native_impl)
+    t3, tail3 = codec.binary_to_term(b1, {"atom": "bytes"})
+    assert isinstance(t3, bytes), "Expected bytes, have: " + t3.__class__.__name__
+    assert t3 == b"hello"
+    _assert_expected_tail(tail3)
 
-    def _decode_atom_as_string(self, codec):
-        """ Try an atom 'hello' to a Python string """
-        b1 = self._etf_bytes([131, py_impl.TAG_ATOM_EXT,
-                              0, 5,
-                              104, 101, 108, 108, 111])
-        (t2, tail2) = codec.binary_to_term(b1, {"atom": "str"})
-        self.assertTrue(isinstance(t2, str),
-                        "Expected str, have: " + t2.__class__.__name__)
-        self.assertEqual(t2, "hello")
-        self.assertExpectedTail(tail2)
 
-        (t3, tail3) = codec.binary_to_term(b1, {"atom": "bytes"})
-        self.assertTrue(isinstance(t3, bytes),
-                        "Expected bytes, have: " + t3.__class__.__name__)
-        self.assertEqual(t3, b'hello')
-        self.assertExpectedTail(tail3)
+def test_decode_atom_as_strict(codec: ModuleType) -> None:
+    b1 = _etf_bytes([131, py_impl.TAG_ATOM_EXT, 0, 5, 104, 101, 108, 108, 111])
+    t1, tail1 = codec.binary_to_term(b1, {"atom": "StrictAtom"})
+    assert isinstance(t1, StrictAtom), "Result must be StrictAtom " "got {}".format(
+        type(t1)
+    )
+    assert t1 == "hello"
+    _assert_expected_tail(tail1)
 
-    # ----------------
+    b2 = _etf_bytes([131, py_impl.TAG_SMALL_ATOM_EXT, 5, 104, 101, 108, 108, 111])
+    t2, tail2 = codec.binary_to_term(b2, {"atom": "StrictAtom"})
+    assert isinstance(t2, StrictAtom), "Result must be Atom " "object"
+    assert t2 == "hello"
+    _assert_expected_tail(tail2)
 
-    def test_decode_atom_as_strict_py(self):
-        self._decode_atom_as_strict(py_impl)
 
-    def test_decode_atom_as_strict_native(self):
-        self._decode_atom_as_strict(native_impl)
+def test_decode_atom_custom_callable(codec: ModuleType) -> None:
+    b1 = _etf_bytes([131, py_impl.TAG_ATOM_EXT, 0, 5, 104, 101, 108, 108, 111])
 
-    def _decode_atom_as_strict(self, codec):
-        b1 = self._etf_bytes([131, py_impl.TAG_ATOM_EXT,
-                              0, 5,
-                              104, 101, 108, 108, 111])
-        (t1, tail1) = codec.binary_to_term(b1, {"atom": "StrictAtom"})
-        self.assertTrue(isinstance(t1, StrictAtom), "Result must be StrictAtom "
-                                                    "got {}".format(type(t1)))
-        self.assertEqual(t1, "hello")
-        self.assertExpectedTail(tail1)
+    def a_fun(x: str) -> bytes:
+        return bytes(x.encode("utf8"))
 
-        b2 = self._etf_bytes([131, py_impl.TAG_SMALL_ATOM_EXT,
-                              5,
-                              104, 101, 108, 108, 111])
-        (t2, tail2) = codec.binary_to_term(b2, {"atom": "StrictAtom"})
-        self.assertTrue(isinstance(t2, StrictAtom), "Result must be Atom "
-                                                    "object")
-        self.assertEqual(t2, "hello")
-        self.assertExpectedTail(tail2)
+    t1, tail1 = codec.binary_to_term(b1, {"atom_call": a_fun})
+    assert isinstance(t1, bytes)
+    assert t1 == b"hello"
+    _assert_expected_tail(tail1)
 
-    # ----------------
 
-    def test_decode_atom_custom_callable_py(self):
-        self._decode_atom_custom_callable(py_impl)
-        self._decode_atom_custom_class(py_impl)
+def test_decode_atom_custom_class(codec: ModuleType) -> None:
 
-    def test_decode_atom_custom_callable_native(self):
-        self._decode_atom_custom_callable(native_impl)
-        self._decode_atom_custom_class(native_impl)
+    b1 = _etf_bytes([131, py_impl.TAG_ATOM_EXT, 0, 5, 104, 101, 108, 108, 111])
 
-    def _decode_atom_custom_callable(self, codec):
-        b1 = self._etf_bytes([131, py_impl.TAG_ATOM_EXT,
-                              0, 5,
-                              104, 101, 108, 108, 111])
+    class A(str):
+        pass
 
-        a_fun = lambda x: bytes(x.encode('utf8'))
-        (t1, tail1) = codec.binary_to_term(b1, {"atom_call": a_fun})
-        self.assertTrue(isinstance(t1, bytes))
-        self.assertEqual(t1, b"hello")
-        self.assertExpectedTail(tail1)
+    class B:
+        def __init__(self, text: str) -> None:
+            self._text = text
 
-    def _decode_atom_custom_class(self, codec):
+    t1, tail1 = codec.binary_to_term(b1, {"atom_call": str})
+    assert isinstance(t1, str)
+    assert t1 == "hello"
+    _assert_expected_tail(tail1)
 
-        b1 = self._etf_bytes([131, py_impl.TAG_ATOM_EXT,
-                              0, 5,
-                              104, 101, 108, 108, 111])
+    t2, tail2 = codec.binary_to_term(b1, {"atom_call": A})
+    assert isinstance(t2, str)
+    assert isinstance(t2, A)
+    assert t2 == "hello"
+    _assert_expected_tail(tail2)
 
+    t3, tail3 = codec.binary_to_term(b1, {"atom_call": B})
+    assert isinstance(t3, B)
+    assert t3._text == "hello"
+    _assert_expected_tail(tail3)
+
+
+def test_ref_count_leak_on_custom_atom(native_codec: ModuleType) -> None:
+    b = _etf_bytes([131, py_impl.TAG_ATOM_EXT, 0, 5, 104, 101, 108, 108, 111])
+
+    def test_fun(codec: ModuleType, b_data: bytes) -> tuple[str, bytes]:
         class A(str):
             pass
 
-        class B:
-            def __init__(self, text):
-                self._text = text
+        res: tuple[str, bytes] = codec.binary_to_term(b_data, {"atom_call": A})
+        return res
 
-        (t1, tail1) = codec.binary_to_term(b1, {"atom_call": str})
-        self.assertTrue(isinstance(t1, str))
-        self.assertEqual(t1, "hello")
-        self.assertExpectedTail(tail1)
+    for i in range(10):
+        p_res, p_tail = test_fun(py_impl, b)
+        n_res, n_tail = test_fun(native_codec, b)
 
-        (t2, tail2) = codec.binary_to_term(b1, {"atom_call": A})
-        self.assertTrue(isinstance(t2, str))
-        self.assertTrue(isinstance(t2, A))
-        self.assertEqual(t2, "hello")
-        self.assertExpectedTail(tail2)
-
-        (t3, tail3) = codec.binary_to_term(b1, {"atom_call": B})
-        self.assertTrue(isinstance(t3, B))
-        self.assertEqual(t3._text, "hello")
-        self.assertExpectedTail(tail3)
-
-    # ----------------
-
-    def test_ref_count_leak_on_custom_atom(self):
-        b = self._etf_bytes([131, py_impl.TAG_ATOM_EXT,
-                             0, 5,
-                             104, 101, 108, 108, 111])
-
-        def test_fun(codec, b_data):
-            class A(str):
-                pass
-
-            return codec.binary_to_term(b_data, {'atom_call': A})
-
-        for i in range(10):
-            p_res, p_tail = test_fun(py_impl, b)
-            n_res, n_tail = test_fun(native_impl, b)
-
-        p_type = type(p_res)
-        p_type_refs = sys.getrefcount(p_type)
-        n_type = type(n_res)
-        n_type_refs = sys.getrefcount(n_type)
-        self.assertEqual(p_res, n_res)
-        self.assertEqual(p_tail, n_tail)
-        self.assertNotEqual(p_type, n_type)
-        self.assertEqual(p_type_refs, n_type_refs)
-
-    # ----------------
-
-    def test_decode_str_py(self):
-        self._decode_str_ascii(py_impl)
-        self._decode_str_unicode(py_impl)
-        self._decode_str_int_list(py_impl)
-
-    def test_decode_str_native(self):
-        self._decode_str_ascii(native_impl)
-        self._decode_str_unicode(native_impl)
-        self._decode_str_int_list(py_impl)
-
-    def _decode_str_ascii(self, codec):
-        """ A string with bytes, encoded as optimized byte array. """
-        b1 = self._etf_bytes([131, py_impl.TAG_STRING_EXT,
-                              0, 5,
-                              104, 101, 108, 108, 111])
-        (t1, tail1) = codec.binary_to_term(b1, None)
-        self.assertTrue(isinstance(t1, str), "Result must be str")
-        self.assertEqual(t1, "hello")
-        self.assertExpectedTail(tail1)
-
-        (t2, tail2) = codec.binary_to_term(b1, {"byte_string": "bytes"})
-        self.assertTrue(isinstance(t2, bytes),
-                        "Result must be bytes, got " + t2.__class__.__name__)
-        self.assertEqual(t2, b"hello")
-        self.assertExpectedTail(tail2)
+    p_type = type(p_res)
+    p_type_refs = sys.getrefcount(p_type)
+    n_type = type(n_res)
+    n_type_refs = sys.getrefcount(n_type)
+    assert p_res == n_res
+    assert p_tail == n_tail
+    assert p_type != n_type
+    assert p_type_refs == n_type_refs
 
 
-    def _decode_str_int_list(self, codec):
-        """ A string with bytes, encoded as optimized byte array. """
-        b1 = self._etf_bytes([131, py_impl.TAG_STRING_EXT,
-                              0, 5,
-                              104, 101, 108, 108, 111])
-        (t1, tail1) = codec.binary_to_term(b1, {"byte_string": "int_list"})
-        self.assertEqual(t1, [104, 101, 108, 108, 111])
-        self.assertExpectedTail(tail1)
+def test_decode_str_ascii(codec: ModuleType) -> None:
+    """A string with bytes, encoded as optimized byte array."""
+    b1 = _etf_bytes([131, py_impl.TAG_STRING_EXT, 0, 5, 104, 101, 108, 108, 111])
+    t1, tail1 = codec.binary_to_term(b1, None)
+    assert isinstance(t1, str), "Result must be str"
+    assert t1 == "hello"
+    _assert_expected_tail(tail1)
 
-    def _decode_str_unicode(self, codec):
-        """ A string with emoji, encoded as a list of unicode integers. """
-        b1 = self._etf_bytes([
-            131, py_impl.TAG_LIST_EXT,
-            0, 0, 0, 3,                         # length
-            py_impl.TAG_INT, 0, 0, 38, 34,      # 32-bit radiation hazard
-            py_impl.TAG_SMALL_INT, 32,          # 8-bit space (32)
-            py_impl.TAG_INT, 0, 0, 38, 35,      # 32-bit bio-hazard
-            py_impl.TAG_NIL_EXT                 # list tail: NIL
-        ])
-        (t1, tail) = codec.binary_to_term(b1, None)
-        self.assertTrue(isinstance(t1, list), "Result must be a list")
-        self.assertEqual(list_to_unicode_str(t1), u"☢ ☣")
-        self.assertExpectedTail(tail)
-
-    # ----------------
-
-    def test_decode_pid_py(self):
-        self._decode_pid(py_impl)
-
-    def test_decode_pid_native(self):
-        self._decode_pid(native_impl)
-
-    def _decode_pid(self, codec):
-        """ Try a pid """
-        data = self._etf_bytes([
-            131, 103, 100, 0, 13, 101, 114, 108, 64, 49, 50, 55, 46,
-            48, 46, 48, 46, 49, 0, 0, 0, 64, 0, 0, 0, 0, 1
-        ])
-        (val, tail) = codec.binary_to_term(data, None)
-        self.assertTrue(isinstance(val, Pid))
-        self.assertExpectedTail(tail)
-
-    # ----------------
-
-    def test_decode_new_pid_py(self):
-        self._decode_new_pid(py_impl)
-
-    def test_decode_new_pid_native(self):
-        self._decode_new_pid(native_impl)
-
-    def _decode_new_pid(self, codec):
-        """ Try a new pid """
-        data = self._etf_bytes([
-            131, 88, 100, 0, 13, 101, 114, 108, 64, 49, 50, 55, 46,
-            48, 46, 48, 46, 49, 0, 0, 0, 64, 0, 0, 0, 0, 0, 0, 0, 1
-        ])
-        (val, tail) = codec.binary_to_term(data, None)
-        self.assertTrue(isinstance(val, Pid))
-        self.assertExpectedTail(tail)
-
-    # ----------------
-
-    def test_decode_ref_py(self):
-        self._decode_ref(py_impl)
-
-    def test_decode_ref_native(self):
-        self._decode_ref(native_impl)
-
-    def _decode_ref(self, codec):
-        """ Try a reference """
-        b1 = self._etf_bytes([
-            131, 114, 0, 3, 100, 0, 13, 101, 114, 108, 64, 49, 50,
-            55, 46, 48, 46, 48, 46, 49, 1, 0, 0, 1, 58, 0, 0, 0, 2,
-            0, 0, 0, 0
-        ])
-        (t1, tail) = codec.binary_to_term(b1, None)
-        self.assertTrue(isinstance(t1, Reference))
-        self.assertExpectedTail(tail)
-
-    # ----------------
-
-    def test_decode_newer_ref_py(self):
-        self._decode_newer_ref(py_impl)
-
-    def test_decode_newer_ref_native(self):
-        self._decode_newer_ref(native_impl)
-
-    def _decode_newer_ref(self, codec):
-        """ Try a newer reference """
-        b1 = self._etf_bytes([
-            131, 90, 0, 3, 100, 0, 13, 101, 114, 108, 64, 49, 50,
-            55, 46, 48, 46, 48, 46, 49, 0, 0, 0, 1, 0, 0, 1, 58,
-            0, 0, 0, 2, 0, 0, 0, 0
-        ])
-        (t1, tail) = codec.binary_to_term(b1, None)
-        self.assertTrue(isinstance(t1, Reference))
-        self.assertExpectedTail(tail)
-
-    # ----------------
-
-    def test_decode_tuple_py(self):
-        self._decode_tuple(py_impl)
-
-    def test_decode_tuple_native(self):
-        self._decode_tuple(native_impl)
-
-    def _decode_tuple(self, codec):
-        """ Try decode some tuple values """
-        data1 = self._etf_bytes([131, py_impl.TAG_SMALL_TUPLE_EXT,
-                                 2,
-                                 py_impl.TAG_SMALL_INT, 1,
-                                 py_impl.TAG_ATOM_EXT, 0, 2, 111, 107])
-        (val1, tail1) = codec.binary_to_term(data1, None)
-        self.assertEqual((1, Atom("ok")), val1)
-        self.assertExpectedTail(tail1)
-
-        data2 = self._etf_bytes([131, py_impl.TAG_LARGE_TUPLE_EXT,
-                                 0, 0, 0, 2,
-                                 py_impl.TAG_SMALL_INT, 1,
-                                 py_impl.TAG_ATOM_EXT, 0, 2, 111, 107])
-        (val2, tail2) = codec.binary_to_term(data2, None)
-        self.assertEqual((1, Atom("ok")), val2)
-        self.assertExpectedTail(tail2)
-
-        # Empty tuple
-        data3 = self._etf_bytes([131, py_impl.TAG_SMALL_TUPLE_EXT, 0])
-        (val3, tail3) = codec.binary_to_term(data3, None)
-        self.assertEqual((), val3)
-        self.assertExpectedTail(tail3)
+    t2, tail2 = codec.binary_to_term(b1, {"byte_string": "bytes"})
+    assert isinstance(t2, bytes), "Result must be bytes, got " + t2.__class__.__name__
+    assert t2 == b"hello"
+    _assert_expected_tail(tail2)
 
 
-# ----------------
-
-    def test_decode_list_py(self):
-        self._decode_list(py_impl)
-
-    def test_decode_list_native(self):
-        self._decode_list(native_impl)
-
-    def _decode_list(self, codec):
-        """ Try decode some list values """
-        data1 = self._etf_bytes([131, py_impl.TAG_NIL_EXT])
-        (val1, tail1) = codec.binary_to_term(data1, None)
-        self.assertEqual([], val1)
-        self.assertExpectedTail(tail1)
-
-        # Test data is [1, ok]
-        data2 = self._etf_bytes([131, py_impl.TAG_LIST_EXT,
-                                 0, 0, 0, 2,
-                                 py_impl.TAG_SMALL_INT, 1,
-                                 py_impl.TAG_ATOM_EXT, 0, 2, 111, 107,
-                                 py_impl.TAG_NIL_EXT])
-        (val2, tail2) = codec.binary_to_term(data2, None)
-        self.assertTrue(isinstance(val2, list),
-                        "Expected list, got: %s (%s)"
-                        % (val2.__class__.__name__, val2))
-        self.assertEqual(val2, [1, Atom("ok")])
-        self.assertExpectedTail(tail2)
-
-# ----------------
-
-    def test_decode_improper_list_py(self):
-        self._decode_improper_list(py_impl)
-
-    def test_decode_improper_list_native(self):
-        self._decode_improper_list(native_impl)
-
-    def _decode_improper_list(self, codec):
-        # Test data is [1 | ok]
-        data3 = self._etf_bytes([131, py_impl.TAG_LIST_EXT,
-                                 0, 0, 0, 1,
-                                 py_impl.TAG_SMALL_INT, 1,
-                                 py_impl.TAG_ATOM_EXT, 0, 2, 111, 107])
-        (val3, tail3) = codec.binary_to_term(data3, None)
-        self.assertTrue(isinstance(val3, ImproperList),
-                        "Expected list, got: %s (%s)"
-                        % (val3.__class__.__name__, val3))
-        self.assertEqual(val3, ImproperList([1], Atom("ok")))
-        self.assertExpectedTail(tail3)
-# ----------------
-
-    def test_decode_map_py(self):
-        self._decode_map(py_impl)
-
-    def test_decode_map_native(self):
-        self._decode_map(native_impl)
-
-    def _decode_map(self, codec):
-        """ Try a map #{1 => 2, ok => error} """
-        data = self._etf_bytes([
+def test_decode_str_unicode(codec: ModuleType) -> None:
+    """A string with emoji, encoded as a list of unicode integers."""
+    b1 = _etf_bytes(
+        [
             131,
-            py_impl.TAG_MAP_EXT, 0, 0, 0, 2,
-            py_impl.TAG_SMALL_INT, 1,
-            py_impl.TAG_SMALL_INT, 2,
-            py_impl.TAG_ATOM_EXT, 0, 2, 111, 107,
-            py_impl.TAG_ATOM_EXT, 0, 5, 101, 114, 114, 111, 114
-        ])
-        (val, tail) = codec.binary_to_term(data, None)
-        self.assertTrue(isinstance(val, dict))
-        self.assertEqual(val, {1: 2, Atom("ok"): Atom("error")})
-        self.assertExpectedTail(tail)
+            py_impl.TAG_LIST_EXT,
+            0,
+            0,
+            0,
+            3,  # length
+            py_impl.TAG_INT,
+            0,
+            0,
+            38,
+            34,  # 32-bit radiation hazard
+            py_impl.TAG_SMALL_INT,
+            32,  # 8-bit space (32)
+            py_impl.TAG_INT,
+            0,
+            0,
+            38,
+            35,  # 32-bit bio-hazard
+            py_impl.TAG_NIL_EXT,  # list tail: NIL
+        ]
+    )
+    t1, tail = codec.binary_to_term(b1, None)
+    assert isinstance(t1, list), "Result must be a list"
+    assert list_to_unicode_str(t1) == "☢ ☣"
+    _assert_expected_tail(tail)
 
-    # ----------------
 
-    def test_float_py(self):
-        self._float(py_impl)
+def test_decode_str_int_list(codec: ModuleType) -> None:
+    """A string with bytes, encoded as optimized byte array."""
+    b1 = _etf_bytes([131, py_impl.TAG_STRING_EXT, 0, 5, 104, 101, 108, 108, 111])
+    t1, tail1 = codec.binary_to_term(b1, {"byte_string": "int_list"})
+    assert t1 == [104, 101, 108, 108, 111]
+    _assert_expected_tail(tail1)
 
-    def test_float_native(self):
-        self._float(native_impl)
 
-    def _float(self, codec):
-        """ Try decode a prepared double Pi """
-        data = self._etf_bytes([
+def test_decode_pid(codec: ModuleType) -> None:
+    """Try a pid"""
+    data = _etf_bytes(
+        [
+            131,
+            103,
+            100,
+            0,
+            13,
+            101,
+            114,
+            108,
+            64,
+            49,
+            50,
+            55,
+            46,
+            48,
+            46,
+            48,
+            46,
+            49,
+            0,
+            0,
+            0,
+            64,
+            0,
+            0,
+            0,
+            0,
+            1,
+        ]
+    )
+    val, tail = codec.binary_to_term(data, None)
+    assert isinstance(val, Pid)
+    _assert_expected_tail(tail)
+
+
+# Node fix@host as SMALL_ATOM_UTF8_EXT, as in the golden fixtures.
+_FIX_NODE_ATOM = bytes([119, 8]) + b"fix@host"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # PORT_EXT: ID:32, Creation:8 (at most 3)
+        bytes([102]) + _FIX_NODE_ATOM + (2**28 - 1).to_bytes(4) + bytes([1]),
+        # NEW_PORT_EXT: ID:32, Creation:32
+        bytes([89]) + _FIX_NODE_ATOM + (2**28 - 1).to_bytes(4) + (1).to_bytes(4),
+    ],
+    ids=["PORT_EXT", "NEW_PORT_EXT"],
+)
+def test_decode_old_port_tags(codec: ModuleType, body: bytes) -> None:
+    """The older port tags decode to the same Port as OTP 29's V4_PORT_EXT
+    (fixture port_2p28_minus_1), and encode back as V4_PORT_EXT, as OTP 29
+    re-encodes them (TERM-03)."""
+    v4 = (FIXTURE_DIR / "port_2p28_minus_1.etf").read_bytes()
+    value, tail = codec.binary_to_term(bytes([131]) + body, None)
+    assert tail == b""
+    assert value == Port(Atom("fix@host"), 2**28 - 1, 1)
+    assert value == codec.binary_to_term(v4, None)[0]
+    assert codec.term_to_binary(value, None) == v4
+
+
+def test_decode_port_creation_above_3(codec: ModuleType) -> None:
+    """PORT_EXT has a 2-bit creation (is_tiny_creation in external.c)."""
+    data = bytes([131, 102]) + _FIX_NODE_ATOM + (1).to_bytes(4) + bytes([4])
+    with pytest.raises(codec.PyCodecError, match="creation"):
+        codec.binary_to_term(data, None)
+
+
+# Node a@b as SMALL_ATOM_UTF8_EXT.
+_A_B = bytes([119, 3]) + b"a@b"
+
+
+@pytest.mark.parametrize(
+    "data,otp29",
+    [
+        # PID_EXT: ID and Serial are not limited for a remote node.
+        (
+            bytes([131, 103]) + _A_B + b"\xff" * 8 + bytes([3]),
+            bytes([131, 88]) + _A_B + b"\xff" * 8 + (3).to_bytes(4),
+        ),
+        # REFERENCE_EXT: one word of at most 18 bits, creation at most 3.
+        (
+            bytes([131, 101]) + _A_B + (5).to_bytes(4) + bytes([2]),
+            bytes([131, 90, 0, 1]) + _A_B + (2).to_bytes(4) + (5).to_bytes(4),
+        ),
+        # NEW_REFERENCE_EXT, first word 2^18-1.
+        (
+            bytes([131, 114, 0, 3])
+            + _A_B
+            + bytes([1])
+            + b"".join(w.to_bytes(4) for w in (2**18 - 1, 2, 3)),
+            bytes([131, 90, 0, 3])
+            + _A_B
+            + (1).to_bytes(4)
+            + b"".join(w.to_bytes(4) for w in (2**18 - 1, 2, 3)),
+        ),
+    ],
+    ids=["PID_EXT", "REFERENCE_EXT", "NEW_REFERENCE_EXT"],
+)
+def test_decode_old_node_container_tags(
+    codec: ModuleType, data: bytes, otp29: bytes
+) -> None:
+    """Old tags decode and encode back to what OTP 29's
+    ``term_to_binary(binary_to_term(Data))`` gives (``otp29``)."""
+    value, tail = codec.binary_to_term(data, None)
+    assert tail == b""
+    assert codec.term_to_binary(value, None) == otp29
+    assert value == codec.binary_to_term(otp29, None)[0]
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        bytes([131, 90, 0, 0]) + _A_B + (1).to_bytes(4),
+        bytes([131, 114, 0, 0]) + _A_B + bytes([1]),
+    ],
+    ids=["NEWER_REFERENCE_EXT", "NEW_REFERENCE_EXT"],
+)
+def test_decode_ref_without_words(codec: ModuleType, data: bytes) -> None:
+    """OTP 29 reads the first ID word of these from past the end of the
+    term, so it accepts or rejects them depending on the bytes that happen
+    to follow; we refuse a reference with no ID words."""
+    with pytest.raises(codec.PyCodecError, match="ID words"):
+        codec.binary_to_term(data, None)
+
+
+@pytest.mark.parametrize("refid", [b"", b"\x00" * 24, b"\x00" * 5])
+def test_encode_ref_words(codec: ModuleType, refid: bytes) -> None:
+    """A Reference encodes only with 1..5 whole ID words."""
+    with pytest.raises(codec.PyCodecError, match="Reference ID"):
+        codec.term_to_binary(Reference("a@b", 1, refid), None)
+
+
+# Module lists and function map as SMALL_ATOM_UTF8_EXT.
+_LISTS_MAP = bytes([119, 5]) + b"lists" + bytes([119, 3]) + b"map"
+
+
+@pytest.mark.parametrize(
+    "data,otp29",
+    [
+        # Arity as INTEGER_EXT and as SMALL_BIG_EXT: OTP 29 accepts both.
+        (bytes([131, 113]) + _LISTS_MAP + bytes([98, 0, 0, 0, 2]), None),
+        (bytes([131, 113]) + _LISTS_MAP + bytes([110, 1, 0, 2]), None),
+        # term_to_binary(fun lists:map/2, [{minor_version, 1}]): Latin-1 atoms.
+        (
+            bytes([131, 113, 100, 0, 5])
+            + b"lists"
+            + bytes([100, 0, 3])
+            + b"map"
+            + bytes([97, 2]),
+            None,
+        ),
+        # Arity 256: OTP 29 writes it as INTEGER_EXT.
+        (
+            bytes([131, 113]) + _LISTS_MAP + bytes([98, 0, 0, 1, 0]),
+            bytes([131, 113]) + _LISTS_MAP + bytes([98, 0, 0, 1, 0]),
+        ),
+    ],
+    ids=["arity_int_ext", "arity_small_big", "latin1_atoms", "arity_256"],
+)
+def test_decode_export(codec: ModuleType, data: bytes, otp29: bytes | None) -> None:
+    """Re-encoded as OTP 29's ``term_to_binary(binary_to_term(Data))``
+    gives it; ``None`` means the bytes of ``fun lists:map/2``."""
+    if otp29 is None:
+        otp29 = (FIXTURE_DIR / "fun_export.etf").read_bytes()
+    value, tail = codec.binary_to_term(data, None)
+    assert tail == b""
+    assert isinstance(value, Export)
+    assert codec.term_to_binary(value, None) == otp29
+
+
+def test_decode_export_atoms_stay_atoms(codec: ModuleType) -> None:
+    """``fun true:map/2``: the module is the atom, not Python's True, and
+    the atom options do not apply."""
+    data = (
+        bytes([131, 113, 119, 4]) + b"true" + bytes([119, 3]) + b"map" + bytes([97, 2])
+    )
+    value, _tail = codec.binary_to_term(data, {"atom": "str"})
+    assert value == Export(Atom("true"), Atom("map"), 2)
+    assert type(value.module_) is Atom
+
+
+@pytest.mark.parametrize("arity", [-1, 2**59, 1.5])
+def test_encode_export_bad_arity(codec: ModuleType, arity: Any) -> None:
+    with pytest.raises(codec.PyCodecError, match="arity"):
+        codec.term_to_binary(Export("lists", "map", arity), None)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        Atom("a" * 256),
+        Atom("\U0001f600" * 256),
+        Pid(Atom("n" * 256), 1, 2, 3),
+        Export("m", "f" * 256, 1),
+    ],
+    ids=["ascii", "4byte", "pid_node", "export_function"],
+)
+def test_encode_atom_over_255_characters(codec: ModuleType, value: Any) -> None:
+    """An atom has at most 255 characters, wherever it appears."""
+    with pytest.raises(codec.PyCodecError, match="255"):
+        codec.term_to_binary(value, None)
+
+
+def test_atom_255_characters_round_trip(codec: ModuleType) -> None:
+    """255 four-byte characters: 1020 bytes, ATOM_UTF8_EXT, as OTP 29 writes
+    them (fixture atom_255_4byte); the Latin-1 form decodes to the same atom."""
+    data = (FIXTURE_DIR / "atom_255_4byte.etf").read_bytes()
+    assert data[1] == 118
+    value = codec.binary_to_term(data, None)[0]
+    assert value == Atom("\U0001f600" * 255)
+    assert codec.term_to_binary(value, None) == data
+    latin1 = (FIXTURE_DIR / "atom_latin1_minor_1.etf").read_bytes()
+    utf8 = (FIXTURE_DIR / "atom_latin1.etf").read_bytes()
+    assert latin1 != utf8
+    assert codec.binary_to_term(latin1, None)[0] == codec.binary_to_term(utf8, None)[0]
+
+
+def test_reference_create_is_distinct() -> None:
+    refs = {Reference.create("py@host", 1) for _ in range(10_000)}
+    assert len(refs) == 10_000
+    assert all(len(r.id_) == 12 for r in refs)
+
+
+@pytest.mark.parametrize("port", [Port("a@b", 2**64, 1), Port("a@b", 1, 2**32)])
+def test_encode_port_out_of_range(codec: ModuleType, port: Port) -> None:
+    with pytest.raises(codec.PyCodecError):
+        codec.term_to_binary(port, None)
+
+
+def test_decode_new_pid(codec: ModuleType) -> None:
+    """Try a new pid"""
+    data = _etf_bytes(
+        [
+            131,
+            88,
+            100,
+            0,
+            13,
+            101,
+            114,
+            108,
+            64,
+            49,
+            50,
+            55,
+            46,
+            48,
+            46,
+            48,
+            46,
+            49,
+            0,
+            0,
+            0,
+            64,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+        ]
+    )
+    val, tail = codec.binary_to_term(data, None)
+    assert isinstance(val, Pid)
+    _assert_expected_tail(tail)
+
+
+def test_decode_ref(codec: ModuleType) -> None:
+    """Try a reference"""
+    b1 = _etf_bytes(
+        [
+            131,
+            114,
+            0,
+            3,
+            100,
+            0,
+            13,
+            101,
+            114,
+            108,
+            64,
+            49,
+            50,
+            55,
+            46,
+            48,
+            46,
+            48,
+            46,
+            49,
+            1,
+            0,
+            0,
+            1,
+            58,
+            0,
+            0,
+            0,
+            2,
+            0,
+            0,
+            0,
+            0,
+        ]
+    )
+    t1, tail = codec.binary_to_term(b1, None)
+    assert isinstance(t1, Reference)
+    _assert_expected_tail(tail)
+
+
+def test_decode_newer_ref(codec: ModuleType) -> None:
+    """Try a newer reference"""
+    b1 = _etf_bytes(
+        [
+            131,
+            90,
+            0,
+            3,
+            100,
+            0,
+            13,
+            101,
+            114,
+            108,
+            64,
+            49,
+            50,
+            55,
+            46,
+            48,
+            46,
+            48,
+            46,
+            49,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            1,
+            58,
+            0,
+            0,
+            0,
+            2,
+            0,
+            0,
+            0,
+            0,
+        ]
+    )
+    t1, tail = codec.binary_to_term(b1, None)
+    assert isinstance(t1, Reference)
+    _assert_expected_tail(tail)
+
+
+def test_decode_tuple(codec: ModuleType) -> None:
+    """Try decode some tuple values"""
+    data1 = _etf_bytes(
+        [
+            131,
+            py_impl.TAG_SMALL_TUPLE_EXT,
+            2,
+            py_impl.TAG_SMALL_INT,
+            1,
+            py_impl.TAG_ATOM_EXT,
+            0,
+            2,
+            111,
+            107,
+        ]
+    )
+    val1, tail1 = codec.binary_to_term(data1, None)
+    assert (1, Atom("ok")) == val1
+    _assert_expected_tail(tail1)
+
+    data2 = _etf_bytes(
+        [
+            131,
+            py_impl.TAG_LARGE_TUPLE_EXT,
+            0,
+            0,
+            0,
+            2,
+            py_impl.TAG_SMALL_INT,
+            1,
+            py_impl.TAG_ATOM_EXT,
+            0,
+            2,
+            111,
+            107,
+        ]
+    )
+    val2, tail2 = codec.binary_to_term(data2, None)
+    assert (1, Atom("ok")) == val2
+    _assert_expected_tail(tail2)
+
+    # Empty tuple
+    data3 = _etf_bytes([131, py_impl.TAG_SMALL_TUPLE_EXT, 0])
+    val3, tail3 = codec.binary_to_term(data3, None)
+    assert () == val3
+    _assert_expected_tail(tail3)
+
+
+def test_decode_list(codec: ModuleType) -> None:
+    """Try decode some list values"""
+    data1 = _etf_bytes([131, py_impl.TAG_NIL_EXT])
+    val1, tail1 = codec.binary_to_term(data1, None)
+    assert [] == val1
+    _assert_expected_tail(tail1)
+
+    # Test data is [1, ok]
+    data2 = _etf_bytes(
+        [
+            131,
+            py_impl.TAG_LIST_EXT,
+            0,
+            0,
+            0,
+            2,
+            py_impl.TAG_SMALL_INT,
+            1,
+            py_impl.TAG_ATOM_EXT,
+            0,
+            2,
+            111,
+            107,
+            py_impl.TAG_NIL_EXT,
+        ]
+    )
+    val2, tail2 = codec.binary_to_term(data2, None)
+    assert isinstance(val2, list), "Expected list, got: %s (%s)" % (
+        val2.__class__.__name__,
+        val2,
+    )
+    assert val2 == [1, Atom("ok")]
+    _assert_expected_tail(tail2)
+
+
+def test_decode_improper_list(codec: ModuleType) -> None:
+    # Test data is [1 | ok]
+    data3 = _etf_bytes(
+        [
+            131,
+            py_impl.TAG_LIST_EXT,
+            0,
+            0,
+            0,
+            1,
+            py_impl.TAG_SMALL_INT,
+            1,
+            py_impl.TAG_ATOM_EXT,
+            0,
+            2,
+            111,
+            107,
+        ]
+    )
+    val3, tail3 = codec.binary_to_term(data3, None)
+    assert isinstance(val3, ImproperList), "Expected list, got: %s (%s)" % (
+        val3.__class__.__name__,
+        val3,
+    )
+    assert val3 == ImproperList([1], Atom("ok"))
+    _assert_expected_tail(tail3)
+
+
+def test_decode_map(codec: ModuleType) -> None:
+    """Try a map #{1 => 2, ok => error}"""
+    data = _etf_bytes(
+        [
+            131,
+            py_impl.TAG_MAP_EXT,
+            0,
+            0,
+            0,
+            2,
+            py_impl.TAG_SMALL_INT,
+            1,
+            py_impl.TAG_SMALL_INT,
+            2,
+            py_impl.TAG_ATOM_EXT,
+            0,
+            2,
+            111,
+            107,
+            py_impl.TAG_ATOM_EXT,
+            0,
+            5,
+            101,
+            114,
+            114,
+            111,
+            114,
+        ]
+    )
+    val, tail = codec.binary_to_term(data, None)
+    assert isinstance(val, dict)
+    assert val == {1: 2, Atom("ok"): Atom("error")}
+    _assert_expected_tail(tail)
+
+
+def test_decode_float(codec: ModuleType) -> None:
+    """Try decode a prepared double Pi"""
+    data = _etf_bytes(
+        [
             py_impl.ETF_VERSION_TAG,
             py_impl.TAG_NEW_FLOAT_EXT,  # a 8-byte IEEE double
-            64, 9, 33, 251, 84, 68, 45, 17
-        ])
-        negative = self._etf_bytes([
+            64,
+            9,
+            33,
+            251,
+            84,
+            68,
+            45,
+            17,
+        ]
+    )
+    negative = _etf_bytes(
+        [
             py_impl.ETF_VERSION_TAG,
             py_impl.TAG_NEW_FLOAT_EXT,
-            192, 71, 188, 40, 245, 194, 143, 92
-        ])
-        (val, tail) = codec.binary_to_term(data, None)
-        (nval, ntail) = codec.binary_to_term(negative, None)
-        self.assertEqual(val, 3.14159265358979)
-        self.assertExpectedTail(tail)
-        self.assertEqual(nval, -47.47)
-        self.assertExpectedTail(ntail)
-
-    # ----------------
-    def test_float_in_packed_type_py(self):
-        self._float_in_packed_type(py_impl)
-
-    def test_float_in_packed_type_native(self):
-        self._float_in_packed_type(native_impl)
-
-    def _float_in_packed_type(self, codec):
-        example = self._etf_bytes([
-            py_impl.ETF_VERSION_TAG, py_impl.TAG_SMALL_TUPLE_EXT, 3,
-            py_impl.TAG_NEW_FLOAT_EXT, 64, 9, 30, 184, 81, 235, 133, 31,
-            py_impl.TAG_SMALL_INT, 13,
-            py_impl.TAG_NEW_FLOAT_EXT, 64, 1, 194, 143, 92, 40, 245, 195
-        ])
-        val, tail = codec.binary_to_term(example, None)
-        self.assertEqual(val, (3.14, 13, 2.22))
-        self.assertExpectedTail(tail)
-
-    # ----------------
-
-    def test_decode_int_py(self):
-        self._decode_int(py_impl)
-
-    def test_decode_int_native(self):
-        self._decode_int(native_impl)
-
-    def _decode_int(self, codec):
-        positive = self._etf_bytes([131, 98, 0, 0, 18, 139])  # 4747
-        negative = self._etf_bytes([131, 98, 255, 255, 237, 117])  # -4747
-        (positive_val, positive_tail) = codec.binary_to_term(positive, None)
-        (negative_val, negative_tail) = codec.binary_to_term(negative, None)
-        self.assertEqual(positive_val, 4747)
-        self.assertExpectedTail(positive_tail)
-        self.assertEqual(negative_val, -4747)
-        self.assertExpectedTail(negative_tail)
-
-    # ----------------
-
-    def test_decode_small_big_py(self):
-        self._decode_small_big(py_impl)
-
-    def test_decode_small_big_native(self):
-        self._decode_small_big(native_impl)
-
-    def _decode_small_big(self, codec):
-        positive = self._etf_bytes([131, 110, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1])  # 2 ** 64
-        negative = self._etf_bytes([131, 110, 9, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1])  # - (2 ** 64)
-        (positive_val, positive_tail) = codec.binary_to_term(positive, None)
-        (negative_val, negative_tail) = codec.binary_to_term(negative, None)
-        self.assertEqual(positive_val, 2 ** 64)
-        self.assertExpectedTail(positive_tail)
-        self.assertEqual(negative_val, -(2 ** 64))
-        self.assertExpectedTail(negative_tail)
-
-    # ----------------
-
-    def test_decode_small_big_random_bytes_py(self):
-        self._decode_small_big_random_bytes(py_impl)
-
-    def test_decode_small_big_random_bytes_native(self):
-        self._decode_small_big_random_bytes(native_impl)
-
-    def _decode_small_big_random_bytes(self, codec):
-        positive = self._etf_bytes([
-            py_impl.ETF_VERSION_TAG, py_impl.TAG_SMALL_BIG_EXT, 13, 0,
-            210, 10, 63, 78, 238, 224, 115, 195, 246, 15, 233, 142, 1
-        ])
-        negative = self._etf_bytes([
-            py_impl.ETF_VERSION_TAG, py_impl.TAG_SMALL_BIG_EXT, 13, 1,
-            210, 10, 63, 78, 238, 224, 115, 195, 246, 15, 233, 142, 1
-        ])
-        (positive_val, positive_tail) = codec.binary_to_term(positive, None)
-        (negative_val, negative_tail) = codec.binary_to_term(negative, None)
-        self.assertEqual(positive_val, 123456789012345678901234567890)
-        self.assertExpectedTail(positive_tail)
-        self.assertEqual(negative_val, -123456789012345678901234567890)
-        self.assertExpectedTail(negative_tail)
-
-    # ----------------
-
-    def test_decode_large_big_py(self):
-        self._decode_large_big(py_impl)
-
-    def test_decode_large_big_native(self):
-        self._decode_large_big(native_impl)
-
-    def _decode_large_big(self, codec):
-        positive = self._etf_bytes([  # 2 ** 2040
-            131, 111, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1
-        ])
-        negative = self._etf_bytes([  # - (2 ** 2040)
-            131, 111, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1
-        ])
-        (positive_val, positive_tail) = codec.binary_to_term(positive, None)
-        (negative_val, negative_tail) = codec.binary_to_term(negative, None)
-        self.assertEqual(positive_val, 2 ** 2040)
-        self.assertExpectedTail(positive_tail)
-        self.assertEqual(negative_val, -(2 ** 2040))
-        self.assertExpectedTail(negative_tail)
-
-    # ----------------
-
-    def test_decode_binary_py(self):
-        self._decode_binary(py_impl)
-
-    def test_decode_binary_native(self):
-        self._decode_binary(native_impl)
-
-    def _decode_binary(self, codec):
-        """ Decode binary to term.Binary and to Python bytes and compare.
-            Binary is <<34>>.
-        """
-        data1 = self._etf_bytes([131, 109, 0, 0, 0, 1, 34])
-        (val1, tail1) = codec.binary_to_term(data1, None)
-        self.assertEqual(val1, b'"')
-        self.assertExpectedTail(tail1)
-
-    # ----------------
-
-    def test_decode_hook_py(self):
-        self._decode_int(py_impl)
-
-    def test_decode_hook_native(self):
-        self._decode_int(native_impl)
-
-    def _decode_int(self, codec):
-        def negate_hook(x):
-            return -x
-
-        positive = self._etf_bytes([131, 98, 0, 0, 18, 139])  # 4747
-        (negative_val, tail) = codec.binary_to_term(positive, {'decode_hook': {'int': negate_hook}})
-        self.assertEqual(negative_val, -4747)
-        self.assertExpectedTail(tail)
-
-    # ----------------
-
-    def test_decode_fun_py(self):
-        self._decode_fun(py_impl)
-
-    def test_decode_fun_native(self):
-        self._decode_fun(native_impl)
-
-    def _decode_fun(self, codec):
-        data = self._etf_bytes([
-            131, 112, 0, 0, 0, 72, 0, 37, 73, 174, 126, 251, 115,
-            143, 183, 98, 224, 72, 249, 253, 111, 254, 159, 0, 0,
-            0, 0, 0, 0, 0, 1, 100, 0, 5, 116, 101, 115, 116, 49,
-            97, 0, 98, 1, 42, 77, 115, 103, 100, 0, 13, 110, 111,
-            110, 111, 100, 101, 64, 110, 111, 104, 111, 115, 116,
-            0, 0, 0, 58, 0, 0, 0, 0, 0, 97, 123
-        ])
-        (val, tail) = codec.binary_to_term(data, None)
-        self.assertTrue(isinstance(val, Fun))
-        self.assertExpectedTail(tail)
-
-    # ----------------
-
-    def test_decode_compressed_py(self):
-        self._decode_compressed(py_impl)
-
-    def test_decode_compressed_native(self):
-        self._decode_compressed(native_impl)
-
-    def _decode_compressed(self, codec):
-        """ tries to decode compressed data
-        """
-        compressed_data = b'\x83P\x00\x00\x01\xc4x\x9c5\x90QR\x831\x08\x84\xebM\xf6\x00\x9d\x9eB\xdf|\xf5\x00\x98\xd0\xcaL\x08i\x02\x9d\xde\xce\xabI\xfc\xf5-\x04Xv?=\x9d^\xbe\xdfm\xb2B\xc6\nE\xb5f\x13K\x1c\xa4\xecg\x14\xeb\x8b\x8b\xb3\xc7\x04U\x19\xb2\xa4H\xbf\x81\x9bdwq\xcd\r\xb0\xc4R\xabp\xd6\x91\xdb\xd2\x8bT\xa9\xd1\x1d\xe1h\xf4\x99\xfa`?\xb4\x19J\xb7N\xa0&\xf7\xa0\x0b>\x1c\xdcES\x1c*\xfb\xf1\xc8\x92\xf4\x8c{\xc8B\xb7\xe53*\xf8\xc9\xb3\x88\x93\x8buDk\xa4\xc5\x0e\xe5=\x94\xa6\xf6\xa5_I\x199\x0c\xa6t\xae\xe9\xc9\x8e\x04y\xca/x\xdd\x92\x14\xce\x90\x19\xe9\xe4\x08+\x1d\x93\xc7\xe4/\xee\x95g&\xcf\x8f\x87\xb5\x18y\x8e\xd3N&\x05\xaf\xc5(\xd2\xda?\xa2\x0c\x14\xb8\xc6M\xc8\xd1\xb7!\x0c\x9aY\xc4\xbc\xe0\xedYx8\xc7\xe6\x98\x0c\xac\x14\xe2\x92s%\x86T\xf2\xbd\x91)\xc64\xa9\xdc7\xc5M*\x8f\x96h\x83vn\xd8\xf5\x9a\x98\t\x95\x17\xcf\xddUk\xdb\x06m@\x928\xd6\x1f\xd7\xd0\x0b~\x00'
-        decoded_data = b'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum. '
-        (val, tail) = codec.binary_to_term(compressed_data, None)
-        self.assertTrue(val == decoded_data)
-        self.assertEqual(tail, b'')
-
-    # ----------------
-
-    def test_decode_hook_compressed_py(self):
-        self._decode_hook_compressed(py_impl)
-
-    def test_decode_hook_compressed_native(self):
-        self._decode_hook_compressed(native_impl)
-
-    def _decode_hook_compressed(self, codec):
-        """ tries to decode a compressed string, and convert it to unicode using
-            a decode_hook.
-        """
-        def unicode_hook(x):
-            return x.decode()
-
-        compressed_data = b'\x83P\x00\x00\x01\xc4x\x9c5\x90QR\x831\x08\x84\xebM\xf6\x00\x9d\x9eB\xdf|\xf5\x00\x98\xd0\xcaL\x08i\x02\x9d\xde\xce\xabI\xfc\xf5-\x04Xv?=\x9d^\xbe\xdfm\xb2B\xc6\nE\xb5f\x13K\x1c\xa4\xecg\x14\xeb\x8b\x8b\xb3\xc7\x04U\x19\xb2\xa4H\xbf\x81\x9bdwq\xcd\r\xb0\xc4R\xabp\xd6\x91\xdb\xd2\x8bT\xa9\xd1\x1d\xe1h\xf4\x99\xfa`?\xb4\x19J\xb7N\xa0&\xf7\xa0\x0b>\x1c\xdcES\x1c*\xfb\xf1\xc8\x92\xf4\x8c{\xc8B\xb7\xe53*\xf8\xc9\xb3\x88\x93\x8buDk\xa4\xc5\x0e\xe5=\x94\xa6\xf6\xa5_I\x199\x0c\xa6t\xae\xe9\xc9\x8e\x04y\xca/x\xdd\x92\x14\xce\x90\x19\xe9\xe4\x08+\x1d\x93\xc7\xe4/\xee\x95g&\xcf\x8f\x87\xb5\x18y\x8e\xd3N&\x05\xaf\xc5(\xd2\xda?\xa2\x0c\x14\xb8\xc6M\xc8\xd1\xb7!\x0c\x9aY\xc4\xbc\xe0\xedYx8\xc7\xe6\x98\x0c\xac\x14\xe2\x92s%\x86T\xf2\xbd\x91)\xc64\xa9\xdc7\xc5M*\x8f\x96h\x83vn\xd8\xf5\x9a\x98\t\x95\x17\xcf\xddUk\xdb\x06m@\x928\xd6\x1f\xd7\xd0\x0b~\x00'
-        decoded_data = 'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum. '
-
-        (val, tail) = codec.binary_to_term(compressed_data, {'decode_hook': {'bytes': unicode_hook}})
-        self.assertTrue(isinstance(val, str))
-        self.assertTrue(val == decoded_data)
-        self.assertEqual(tail, b'')
+            192,
+            71,
+            188,
+            40,
+            245,
+            194,
+            143,
+            92,
+        ]
+    )
+    val, tail = codec.binary_to_term(data, None)
+    nval, ntail = codec.binary_to_term(negative, None)
+    assert val == 3.14159265358979
+    _assert_expected_tail(tail)
+    assert nval == -47.47
+    _assert_expected_tail(ntail)
 
 
-    # ----------------
+def test_decode_float_in_packed_type(codec: ModuleType) -> None:
+    example = _etf_bytes(
+        [
+            py_impl.ETF_VERSION_TAG,
+            py_impl.TAG_SMALL_TUPLE_EXT,
+            3,
+            py_impl.TAG_NEW_FLOAT_EXT,
+            64,
+            9,
+            30,
+            184,
+            81,
+            235,
+            133,
+            31,
+            py_impl.TAG_SMALL_INT,
+            13,
+            py_impl.TAG_NEW_FLOAT_EXT,
+            64,
+            1,
+            194,
+            143,
+            92,
+            40,
+            245,
+            195,
+        ]
+    )
+    val, tail = codec.binary_to_term(example, None)
+    assert val == (3.14, 13, 2.22)
+    _assert_expected_tail(tail)
 
-    def test_special_py(self):
-        self._special(py_impl)
 
-    def test_special_native(self):
-        self._special(native_impl)
-
-    def _special(self, codec):
-        """ Test decoding true, false, undefined=None """
-        data1 = self._etf_bytes(bytes([py_impl.ETF_VERSION_TAG,
-                                       py_impl.TAG_SMALL_ATOM_UTF8_EXT, 4]) +
-                                b'true')
-        (val1, tail1) = codec.binary_to_term(data1, None)
-        self.assertEqual(val1, True)
-        self.assertExpectedTail(tail1)
-
-        data2 = self._etf_bytes(bytes([py_impl.ETF_VERSION_TAG,
-                                       py_impl.TAG_SMALL_ATOM_UTF8_EXT, 5]) +
-                                b'false')
-        (val2, tail2) = codec.binary_to_term(data2, None)
-        self.assertEqual(val2, False)
-        self.assertExpectedTail(tail2)
-
-        data3 = self._etf_bytes(bytes([py_impl.ETF_VERSION_TAG,
-                                       py_impl.TAG_SMALL_ATOM_UTF8_EXT, 9]) +
-                                b'undefined')
-        (val3, tail3) = codec.binary_to_term(data3, None)
-        self.assertEqual(val3, None)
-        self.assertExpectedTail(tail3)
+def test_decode_int(codec: ModuleType) -> None:
+    positive = _etf_bytes([131, 98, 0, 0, 18, 139])  # 4747
+    negative = _etf_bytes([131, 98, 255, 255, 237, 117])  # -4747
+    positive_val, positive_tail = codec.binary_to_term(positive, None)
+    negative_val, negative_tail = codec.binary_to_term(negative, None)
+    assert positive_val == 4747
+    _assert_expected_tail(positive_tail)
+    assert negative_val == -4747
+    _assert_expected_tail(negative_tail)
 
 
-if __name__ == '__main__':
-    unittest.main()
+def test_decode_small_big(codec: ModuleType) -> None:
+    positive = _etf_bytes([131, 110, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1])  # 2 ** 64
+    negative = _etf_bytes([131, 110, 9, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1])  # - (2 ** 64)
+    positive_val, positive_tail = codec.binary_to_term(positive, None)
+    negative_val, negative_tail = codec.binary_to_term(negative, None)
+    assert positive_val == 2**64
+    _assert_expected_tail(positive_tail)
+    assert negative_val == -(2**64)
+    _assert_expected_tail(negative_tail)
+
+
+def test_decode_small_big_random_bytes(codec: ModuleType) -> None:
+    positive = _etf_bytes(
+        [
+            py_impl.ETF_VERSION_TAG,
+            py_impl.TAG_SMALL_BIG_EXT,
+            13,
+            0,
+            210,
+            10,
+            63,
+            78,
+            238,
+            224,
+            115,
+            195,
+            246,
+            15,
+            233,
+            142,
+            1,
+        ]
+    )
+    negative = _etf_bytes(
+        [
+            py_impl.ETF_VERSION_TAG,
+            py_impl.TAG_SMALL_BIG_EXT,
+            13,
+            1,
+            210,
+            10,
+            63,
+            78,
+            238,
+            224,
+            115,
+            195,
+            246,
+            15,
+            233,
+            142,
+            1,
+        ]
+    )
+    positive_val, positive_tail = codec.binary_to_term(positive, None)
+    negative_val, negative_tail = codec.binary_to_term(negative, None)
+    assert positive_val == 123456789012345678901234567890
+    _assert_expected_tail(positive_tail)
+    assert negative_val == -123456789012345678901234567890
+    _assert_expected_tail(negative_tail)
+
+
+def test_decode_large_big(codec: ModuleType) -> None:
+    positive = _etf_bytes(
+        [  # 2 ** 2040
+            131,
+            111,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+        ]
+    )
+    negative = _etf_bytes(
+        [  # - (2 ** 2040)
+            131,
+            111,
+            0,
+            0,
+            1,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+        ]
+    )
+    positive_val, positive_tail = codec.binary_to_term(positive, None)
+    negative_val, negative_tail = codec.binary_to_term(negative, None)
+    assert positive_val == 2**2040
+    _assert_expected_tail(positive_tail)
+    assert negative_val == -(2**2040)
+    _assert_expected_tail(negative_tail)
+
+
+def test_decode_binary(codec: ModuleType) -> None:
+    """Decode binary to term.Binary and to Python bytes and compare.
+    Binary is <<34>>.
+    """
+    data1 = _etf_bytes([131, 109, 0, 0, 0, 1, 34])
+    val1, tail1 = codec.binary_to_term(data1, None)
+    assert val1 == b'"'
+    _assert_expected_tail(tail1)
+
+
+def test_decode_hook(codec: ModuleType) -> None:
+    def negate_hook(x: int) -> int:
+        return -x
+
+    positive = _etf_bytes([131, 98, 0, 0, 18, 139])  # 4747
+    negative_val, tail = codec.binary_to_term(
+        positive, {"decode_hook": {"int": negate_hook}}
+    )
+    assert negative_val == -4747
+    _assert_expected_tail(tail)
+
+
+def test_decode_bitstring_edges(codec: ModuleType) -> None:
+    """What OTP 29's binary_to_term makes of these (TERM-20): 8 bits in the
+    last byte is the binary <<5>>; unused low bits are cleared: <<1:1>>."""
+    whole = bytes([131, 77, 0, 0, 0, 1, 8, 5])
+    assert codec.binary_to_term(whole, {"bitstring": "BitString"}) == (b"\x05", b"")
+    assert codec.binary_to_term(whole, None) == (b"\x05", b"")
+    dirty = bytes([131, 77, 0, 0, 0, 1, 1, 255])
+    value, _tail = codec.binary_to_term(dirty, {"bitstring": "BitString"})
+    assert value == BitString(b"\x80", 1)
+    assert codec.binary_to_term(dirty, None) == ((b"\x80", 1), b"")
+    with pytest.raises(codec.PyCodecError):
+        codec.binary_to_term(dirty, {"bitstring": "bits"})
+
+
+# {a, [b, #{c => "d"}]} as term_to_binary writes it on OTP 29 (TERM-06).
+NESTED = bytes(
+    [131, 104, 2, 119, 1, 97, 108, 0, 0, 0, 2, 119, 1, 98, 116, 0, 0, 0, 1]
+    + [119, 1, 99, 107, 0, 1, 100, 106]
+)
+
+
+def _typed(value: Any) -> Any:
+    """``value`` with the exact type of every part spelled out, so that
+    ``==`` also compares types (``Atom("a") == "a"`` otherwise)."""
+    if isinstance(value, (list, tuple)):
+        return (type(value).__name__, [_typed(v) for v in value])
+    if isinstance(value, dict):
+        return ("dict", [(_typed(k), _typed(v)) for k, v in value.items()])
+    return (type(value).__name__, value)
+
+
+def _hooked(text: str) -> tuple[str, str]:
+    return ("hooked", text)
+
+
+# Options -> the value of NESTED decoded with them: every option and hook
+# reaches the nested terms, not only the outermost one.
+NESTED_CASES: dict[str, tuple[dict[str, Any], Any]] = {
+    "atom_Atom": (
+        {"atom": "Atom"},
+        (Atom("a"), [Atom("b"), {Atom("c"): "d"}]),
+    ),
+    "atom_StrictAtom": (
+        {"atom": "StrictAtom"},
+        (StrictAtom("a"), [StrictAtom("b"), {StrictAtom("c"): "d"}]),
+    ),
+    "atom_str": ({"atom": "str"}, ("a", ["b", {"c": "d"}])),
+    "atom_bytes": ({"atom": "bytes"}, (b"a", [b"b", {b"c": "d"}])),
+    "atom_call": (
+        {"atom_call": _hooked},
+        (_hooked("a"), [_hooked("b"), {_hooked("c"): "d"}]),
+    ),
+    "atom_call_beats_atom": (
+        {"atom": "bytes", "atom_call": _hooked},
+        (_hooked("a"), [_hooked("b"), {_hooked("c"): "d"}]),
+    ),
+    "byte_string_str": (
+        {"byte_string": "str"},
+        (Atom("a"), [Atom("b"), {Atom("c"): "d"}]),
+    ),
+    "byte_string_bytes": (
+        {"byte_string": "bytes"},
+        (Atom("a"), [Atom("b"), {Atom("c"): b"d"}]),
+    ),
+    "byte_string_int_list": (
+        {"byte_string": "int_list"},
+        (Atom("a"), [Atom("b"), {Atom("c"): [100]}]),
+    ),
+    "hook_Atom": (
+        {"decode_hook": {"Atom": lambda a: _hooked(str(a))}},
+        (_hooked("a"), [_hooked("b"), {_hooked("c"): "d"}]),
+    ),
+    "hook_tuple": (
+        {"decode_hook": {"tuple": list}},
+        [Atom("a"), [Atom("b"), {Atom("c"): "d"}]],
+    ),
+    "hook_str_deepest": (
+        {"decode_hook": {"str": str.upper}},
+        (Atom("a"), [Atom("b"), {Atom("c"): "D"}]),
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(NESTED_CASES))
+def test_options_reach_nested_terms(codec: ModuleType, case: str) -> None:
+    options, expected = NESTED_CASES[case]
+    value, tail = codec.binary_to_term(NESTED, options)
+    assert tail == b""
+    assert _typed(value) == _typed(expected)
+    # The same without the 131 byte.
+    value, tail = codec.binary_to_term_2(NESTED[1:], options)
+    assert tail == b""
+    assert _typed(value) == _typed(expected)
+
+
+def test_hook_sees_each_value_once(codec: ModuleType) -> None:
+    """A hook runs once per value, children before their parent; the NIL
+    that ends a list is not a value."""
+    seen: list[str] = []
+
+    def log(value: Any) -> Any:
+        seen.append(type(value).__name__)
+        return value
+
+    hooks = {name: log for name in ("Atom", "list", "dict", "str", "tuple")}
+    codec.binary_to_term(NESTED, {"decode_hook": hooks})
+    assert seen == ["Atom", "Atom", "Atom", "str", "dict", "list", "tuple"]
+
+
+def test_node_names_ignore_options(codec: ModuleType) -> None:
+    """Node names of pids and references are Atom whatever the options; no
+    hook sees them."""
+    pid = (FIXTURE_DIR / "pid_small.etf").read_bytes()
+    ref = (FIXTURE_DIR / "ref_3_words.etf").read_bytes()
+
+    def no_atoms(value: Any) -> Any:
+        raise AssertionError("hook called for %r" % (value,))
+
+    for data in (pid, ref):
+        for options in (
+            {"atom": "bytes"},
+            {"atom": "str", "decode_hook": {"Atom": no_atoms, "str": no_atoms}},
+            {"atom_call": no_atoms},
+        ):
+            value, _tail = codec.binary_to_term(data, options)
+            assert type(value.node_name_) is Atom
+            assert value.node_name_ == "fix@host"
+
+
+# An exception type only the tests below raise.
+class _HookFailed(Exception):
+    pass
+
+
+def _fail(value: Any) -> Any:
+    raise _HookFailed("no %r" % (value,))
+
+
+@pytest.mark.parametrize(
+    "options",
+    [{"decode_hook": {"str": _fail}}, {"atom_call": _fail}],
+    ids=["decode_hook", "atom_call"],
+)
+def test_callable_raising(codec: ModuleType, options: dict[str, Any]) -> None:
+    """A raising option callable gives PyCodecError; the user's exception is
+    its ``__cause__`` (TERM-08)."""
+    with pytest.raises(codec.PyCodecError) as info:
+        codec.binary_to_term(NESTED, options)
+    assert isinstance(info.value.__cause__, _HookFailed)
+
+
+@pytest.mark.parametrize(
+    "name, key_type", [("map_list_key", "list"), ("map_map_key", "dict")]
+)
+def test_unhashable_map_key(codec: ModuleType, name: str, key_type: str) -> None:
+    """A map key Python cannot hash gives PyCodecError naming the key's type,
+    with the dict's TypeError as ``__cause__`` (TERM-08)."""
+    data = (FIXTURE_DIR / (name + ".etf")).read_bytes()
+    with pytest.raises(codec.PyCodecError, match="key of type %s" % key_type) as info:
+        codec.binary_to_term(data, None)
+    assert isinstance(info.value.__cause__, TypeError)
+
+
+@pytest.mark.parametrize(
+    "name, key_type",
+    [
+        ("map_int_float_key", "float"),  # #{1 => a, 1.0 => b}
+        ("map_true_int_key", "bool"),  # #{true => x, 1 => y}
+        ("map_tuple_int_float_key", "tuple"),  # #{{1} => a, {1.0} => b}
+        ("map_zero_keys", "float"),  # #{0.0 => a, -0.0 => b}
+        ("map_atom_string_key", "str"),  # #{abc => a, "abc" => b}
+    ],
+)
+def test_map_keys_equal_in_python(codec: ModuleType, name: str, key_type: str) -> None:
+    """A map whose keys differ in Erlang but are one key in Python is
+    refused: a dict would drop entries (TERM-23). Bytes written by OTP 29."""
+    data = (FIXTURE_DIR / (name + ".etf")).read_bytes()
+    with pytest.raises(
+        codec.PyCodecError, match="key of type %s equals an earlier key" % key_type
+    ):
+        codec.binary_to_term(data, None)
+
+
+def test_map_keys_equal_in_python_nested(codec: ModuleType) -> None:
+    """The check holds for a map inside another term, and a map whose keys
+    stay apart in Python still decodes."""
+    inner = (FIXTURE_DIR / "map_int_float_key.etf").read_bytes()[1:]
+    with pytest.raises(codec.PyCodecError, match="equals an earlier key"):
+        codec.binary_to_term(bytes([131, 104, 2, 97, 7]) + inner, None)
+    # #{1 => a, 1.5 => b}, as OTP 29 writes it.
+    apart = bytes(
+        [131, 116, 0, 0, 0, 2, 97, 1, 119, 1, 97]
+        + [70, 63, 248, 0, 0, 0, 0, 0, 0, 119, 1, 98]
+    )
+    value, tail = codec.binary_to_term(apart, None)
+    assert value == {1: Atom("a"), 1.5: Atom("b")} and tail == b""
+
+
+def test_improper_list_falsy_tail(codec: ModuleType) -> None:
+    """[1|0] and [1|undefined] as OTP 29 writes them keep their tails."""
+    zero = bytes([131, 108, 0, 0, 0, 1, 97, 1, 97, 0])
+    undefined = bytes([131, 108, 0, 0, 0, 1, 97, 1, 119, 9]) + b"undefined"
+    for data, tail in ((zero, 0), (undefined, None)):
+        value, rest = codec.binary_to_term(data, None)
+        assert rest == b""
+        assert isinstance(value, ImproperList)
+        assert value == ImproperList([1], tail)
+        assert codec.term_to_binary(value, None) == data
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"atom": "Atoms"},
+        {"byte_string": "list"},
+        {"atom_call": "not callable"},
+        {"decode_hook": [("int", abs)]},
+    ],
+    ids=["atom", "byte_string", "atom_call", "decode_hook"],
+)
+def test_bad_options(codec: ModuleType, options: dict[str, Any]) -> None:
+    with pytest.raises(codec.PyCodecError):
+        codec.binary_to_term(NESTED, options)
+
+
+def test_decode_fun(codec: ModuleType) -> None:
+    data = _etf_bytes(
+        [
+            131,
+            112,
+            0,
+            0,
+            0,
+            72,
+            0,
+            37,
+            73,
+            174,
+            126,
+            251,
+            115,
+            143,
+            183,
+            98,
+            224,
+            72,
+            249,
+            253,
+            111,
+            254,
+            159,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            100,
+            0,
+            5,
+            116,
+            101,
+            115,
+            116,
+            49,
+            97,
+            0,
+            98,
+            1,
+            42,
+            77,
+            115,
+            103,
+            100,
+            0,
+            13,
+            110,
+            111,
+            110,
+            111,
+            100,
+            101,
+            64,
+            110,
+            111,
+            104,
+            111,
+            115,
+            116,
+            0,
+            0,
+            0,
+            58,
+            0,
+            0,
+            0,
+            0,
+            0,
+            97,
+            123,
+        ]
+    )
+    val, tail = codec.binary_to_term(data, None)
+    assert isinstance(val, Fun)
+    _assert_expected_tail(tail)
+
+
+@pytest.mark.parametrize("name", ["fun_local", "fun_closure"])
+def test_fun_reencodes_to_otp_bytes(codec: ModuleType, name: str) -> None:
+    """A local fun from OTP 29 encodes back to exactly OTP's bytes, Size
+    included; the closure's free variables come back as a list."""
+    data = (FIXTURE_DIR / (name + ".etf")).read_bytes()
+    value, tail = codec.binary_to_term(data, None)
+    assert tail == b""
+    assert isinstance(value, Fun)
+    assert type(value.free_) is list
+    assert value.module_ == Atom("gen_fixtures")
+    assert isinstance(value.pid_, Pid)
+    assert codec.term_to_binary(value, None) == data
+    if name == "fun_closure":
+        assert value.free_ == [1, Atom("two")]
+
+
+@pytest.mark.parametrize("size", [0, 0xFFFFFFFF])
+def test_fun_size_is_ignored(codec: ModuleType, size: int) -> None:
+    """OTP 29 decodes a NEW_FUN_EXT whatever its Size says (OTP-18104); so
+    do we, and the re-encoded fun has the right Size."""
+    data = (FIXTURE_DIR / "fun_closure.etf").read_bytes()
+    wrong = data[:2] + size.to_bytes(4) + data[6:]
+    value, _tail = codec.binary_to_term(wrong, None)
+    assert value == codec.binary_to_term(data, None)[0]
+    assert codec.term_to_binary(value, None) == data
+
+
+def test_fun_size_counts_large_free_binaries(codec: ModuleType) -> None:
+    """Size counts free variables of any size: OTP 29's closure, given a
+    10 KiB binary and itself as its free variables. The native encoder
+    writes large binaries straight into the result (TERM-27)."""
+    data = (FIXTURE_DIR / "fun_closure.etf").read_bytes()
+    value, _tail = codec.binary_to_term(data, None)
+    inner, _tail = codec.binary_to_term(data, None)
+    big = bytes(range(256)) * 40
+    value.free_ = [big, inner]
+    # OTP's bytes: 131, 112, Size(4), Arity, Uniq(16), Index(4), NumFree(4),
+    # Module, OldIndex, OldUniq, Pid, then the free variables 1 and 'two'.
+    free_at = len(data) - len(bytes([97, 1, 119, 3]) + b"two")
+    fun = (
+        bytes([112, 0, 0, 0, 0])
+        + data[6:27]
+        + (2).to_bytes(4)
+        + data[31:free_at]
+        + bytes([109])
+        + len(big).to_bytes(4)
+        + big
+        + data[1:]
+    )
+    expected = bytes([131, 112]) + (len(fun) - 1).to_bytes(4) + fun[5:]
+    assert codec.term_to_binary(value, None) == expected
+
+
+def test_fun_equality() -> None:
+    data = (FIXTURE_DIR / "fun_closure.etf").read_bytes()
+    a = py_impl.binary_to_term(data, None)[0]
+    b = py_impl.binary_to_term(data, None)[0]
+    assert isinstance(a, Fun) and isinstance(b, Fun)
+    assert a == b and hash(a) == hash(b)
+    b.pid_ = Pid(Atom("other@host"), 1, 2, 3)
+    assert a == b  # the creator pid does not count, as in Erlang
+    b.free_ = [2, Atom("two")]
+    assert a != b
+    assert "gen_fixtures" in repr(a)
+
+
+def test_encode_fun_bad_fields(codec: ModuleType) -> None:
+    good = codec.binary_to_term((FIXTURE_DIR / "fun_local.etf").read_bytes(), None)[0]
+    for field, bad in [
+        ("uniq_", b"short"),
+        ("arity_", 256),
+        ("old_index_", 2**59),
+        ("pid_", None),
+        ("free_", [0] * 256),
+    ]:
+        fun = copy.copy(good)
+        setattr(fun, field, bad)
+        with pytest.raises(codec.PyCodecError):
+            codec.term_to_binary(fun, None)
+
+
+@pytest.mark.parametrize(
+    "text,value",
+    [
+        # What OTP 29's binary_to_term gives for these (sys_chars_to_double).
+        (b"1,5e+00", 1.5),  # either radix character
+        (b"1.0e-400", 0.0),  # an underflow is accepted
+        (b"1.5\0xyz", 1.5),  # the text ends at the first NUL
+        (b"-2.25", -2.25),
+    ],
+)
+def test_decode_float_ext(codec: ModuleType, text: bytes, value: float) -> None:
+    data = bytes([131, 99]) + text.ljust(31, b"\0")
+    decoded, tail = codec.binary_to_term(data, None)
+    assert tail == b""
+    assert type(decoded) is float and decoded == value
+    # Encoded back as NEW_FLOAT_EXT, never FLOAT_EXT.
+    assert codec.term_to_binary(decoded, None)[1] == 70
+
+
+def test_decode_float_ext_without_nul(codec: ModuleType) -> None:
+    """31 bytes of float text with no NUL: OTP would read past the term to
+    find the end of the text; we refuse it."""
+    data = bytes([131, 99]) + b"1." + b"0" * 29
+    with pytest.raises(codec.PyCodecError, match="FLOAT_EXT"):
+        codec.binary_to_term(data, None)
+
+
+def test_decode_local_ext(codec: ModuleType) -> None:
+    """term_to_binary({a, 1}, [local]) from OTP 29 (fixture local_ext): the
+    error says what the term is, not just "unknown tag"."""
+    data = (FIXTURE_DIR / "local_ext.etf").read_bytes()
+    assert data[1] == 121
+    with pytest.raises(codec.PyCodecError, match="LOCAL_EXT"):
+        codec.binary_to_term(data, None)
+
+
+def test_decode_record_from_suite(codec: ModuleType) -> None:
+    """native_record_SUITE:gh_11398, y(1, 1): one field, exported. Fields
+    keep their order; values pass through options, names do not."""
+    data = (
+        bytes([131, 67, 0, 0, 0, 1, 1, 119, 19])
+        + b"native_record_SUITE"
+        + bytes([119, 3])
+        + b"exp"
+        + bytes([119, 1])
+        + b"a"
+        + bytes([97, 1])
+    )
+    value, tail = codec.binary_to_term(data, None)
+    assert tail == b""
+    assert value == Record(
+        Atom("native_record_SUITE"), Atom("exp"), True, {Atom("a"): 1}
+    )
+    assert codec.term_to_binary(value, None) == data
+    as_str = codec.binary_to_term(data, {"atom": "str"})[0]
+    assert type(as_str.name_) is Atom and type(next(iter(as_str.fields_))) is Atom
+
+
+def test_record_field_order(codec: ModuleType) -> None:
+    """Fields encode in the dict's order, values with them."""
+    rec = Record("m", "r", False, {Atom("b"): 2, Atom("a"): [1]})
+    value = codec.binary_to_term(codec.term_to_binary(rec, None), None)[0]
+    assert list(value.fields_.items()) == [(Atom("b"), 2), (Atom("a"), [1])]
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        # exported must be a bool
+        Record("m", "r", 1, {}),  # type: ignore[arg-type]  # deliberately bad
+        # field names must be atoms
+        Record("m", "r", True, {1: 2}),  # type: ignore[dict-item]  # deliberately bad
+        # fields must be a dict
+        Record("m", "r", True, [("a", 1)]),  # type: ignore[arg-type]  # deliberately bad
+    ],
+    ids=["exported_int", "field_int", "fields_list"],
+)
+def test_encode_bad_record(codec: ModuleType, record: Record) -> None:
+    with pytest.raises(codec.PyCodecError, match="Record"):
+        codec.term_to_binary(record, None)
+
+
+def test_decode_compressed(codec: ModuleType) -> None:
+    """tries to decode compressed data: what OTP 29 writes for
+    term_to_binary(<<"Lorem...">>, [compressed]). The vector used before had
+    its zlib checksum cut off; OTP rejects that."""
+    compressed_data = bytes.fromhex(
+        "8350000001c4789c3590515283310884eb4df6009d9e42df7cf50098d0ca4c0869029ddeceab49fcf52d0458763f3d9d5ebedf6db242c60a45b566134b1ca4ec6714eb8b8bb3c7045519b2a448bf819b647771cd0db0c452ab70d691dbd28b54a9d11de168f499fa603fb4194ab74ea026f7a00b3e1cdc45531c2afbf1c892f48c7bc842b7e5332af8c9b388938b75446ba4c50ee53d94a6f6a55f4919390ca674aee9c98e0479ca2f78dd9214ce9019e9e4082b1d93c7e42fee956726cf8f87b518798ed34e2605afc528d2da3fa20c14b8c64dc8d1b7210c9a59c4bce0ed597838c7e6980cac14e29273258654f2bd9129c634a9dc37c54d2a8f966883766ed8f59a98099517cfdd556bdb066d409238d61fd7d00b7e000c0ea6bf"
+    )
+    decoded_data = b"Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum. "
+    val, tail = codec.binary_to_term(compressed_data, None)
+    assert val == decoded_data
+    assert tail == b""
+
+
+def test_decode_hook_compressed(codec: ModuleType) -> None:
+    """tries to decode a compressed string, and convert it to unicode using
+    a decode_hook.
+    """
+
+    def unicode_hook(x: bytes) -> str:
+        return x.decode()
+
+    compressed_data = bytes.fromhex(
+        "8350000001c4789c3590515283310884eb4df6009d9e42df7cf50098d0ca4c0869029ddeceab49fcf52d0458763f3d9d5ebedf6db242c60a45b566134b1ca4ec6714eb8b8bb3c7045519b2a448bf819b647771cd0db0c452ab70d691dbd28b54a9d11de168f499fa603fb4194ab74ea026f7a00b3e1cdc45531c2afbf1c892f48c7bc842b7e5332af8c9b388938b75446ba4c50ee53d94a6f6a55f4919390ca674aee9c98e0479ca2f78dd9214ce9019e9e4082b1d93c7e42fee956726cf8f87b518798ed34e2605afc528d2da3fa20c14b8c64dc8d1b7210c9a59c4bce0ed597838c7e6980cac14e29273258654f2bd9129c634a9dc37c54d2a8f966883766ed8f59a98099517cfdd556bdb066d409238d61fd7d00b7e000c0ea6bf"
+    )
+    decoded_data = "Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum. "
+
+    val, tail = codec.binary_to_term(
+        compressed_data, {"decode_hook": {"bytes": unicode_hook}}
+    )
+    assert isinstance(val, str)
+    assert val == decoded_data
+    assert tail == b""
+
+
+def test_decode_special(codec: ModuleType) -> None:
+    """Test decoding true, false, undefined=None"""
+    data1 = _etf_bytes(
+        bytes([py_impl.ETF_VERSION_TAG, py_impl.TAG_SMALL_ATOM_UTF8_EXT, 4]) + b"true"
+    )
+    val1, tail1 = codec.binary_to_term(data1, None)
+    assert val1 == True
+    _assert_expected_tail(tail1)
+
+    data2 = _etf_bytes(
+        bytes([py_impl.ETF_VERSION_TAG, py_impl.TAG_SMALL_ATOM_UTF8_EXT, 5]) + b"false"
+    )
+    val2, tail2 = codec.binary_to_term(data2, None)
+    assert val2 == False
+    _assert_expected_tail(tail2)
+
+    data3 = _etf_bytes(
+        bytes([py_impl.ETF_VERSION_TAG, py_impl.TAG_SMALL_ATOM_UTF8_EXT, 9])
+        + b"undefined"
+    )
+    val3, tail3 = codec.binary_to_term(data3, None)
+    assert val3 == None
+    _assert_expected_tail(tail3)
+
+
+# From erl_ext_dist "Distribution Header for fragmented messages", the worked
+# example: the control message and the message that follow the header. The
+# header announces five atoms; indexes 0 and 1 are "already cached" there
+# (the node names of the two nodes), the texts for them are ours.
+ATOM_CACHE = ["a@host", "b@host", "reg", "call", "set_get_state"]
+ATOM_CACHE_CONTROL = bytes(
+    [104, 4, 97, 6, 103, 82, 0, 0, 0, 0, 85, 0, 0, 0, 0, 2, 82, 1, 82, 2]
+)
+ATOM_CACHE_MESSAGE = bytes(
+    [104, 3, 82, 3, 103, 82, 0, 0, 0, 0, 245, 0, 0, 0, 2, 2]
+    + [104, 2, 82, 4, 109, 0, 0, 0, 128]
+    + [0] * 128
+)
+
+
+def test_decode_atom_cache_refs(codec: ModuleType) -> None:
+    """ATOM_CACHE_REF resolves through the "atom_cache" option, as an atom
+    of its own and as the node name of a pid; no 131 byte (TERM-18)."""
+    options = {"atom_cache": ATOM_CACHE}
+    control, tail = codec.binary_to_term_2(
+        ATOM_CACHE_CONTROL + ATOM_CACHE_MESSAGE, dict(options)
+    )
+    assert control == (6, Pid("a@host", 85, 0, 2), Atom("b@host"), Atom("reg"))
+    assert type(control[1].node_name_) is Atom and type(control[3]) is Atom
+    assert tail == ATOM_CACHE_MESSAGE
+    message, tail = codec.binary_to_term_2(tail, dict(options))
+    assert message == (
+        Atom("call"),
+        Pid("a@host", 245, 2, 2),
+        (Atom("set_get_state"), bytes(128)),
+    )
+    assert tail == b""
+
+
+def test_decode_atom_cache_follows_atom_options(codec: ModuleType) -> None:
+    """A cached atom is an atom like any other: `true` becomes True, the
+    "atom" option applies, a tuple serves as the cache."""
+    cache = ("true", "héllo")
+    data = bytes([104, 2, 82, 0, 82, 1])
+    assert codec.binary_to_term_2(data, {"atom_cache": cache})[0] == (
+        True,
+        Atom("héllo"),
+    )
+    value, _ = codec.binary_to_term_2(data, {"atom_cache": cache, "atom": "str"})
+    assert value == (True, "héllo") and type(value[1]) is str
+
+
+@pytest.mark.parametrize(
+    "data, options",
+    [
+        pytest.param(bytes([82, 0]), None, id="no-option"),
+        pytest.param(bytes([82, 0]), {}, id="option-absent"),
+        pytest.param(bytes([82, 5]), {"atom_cache": ATOM_CACHE}, id="index-5-of-5"),
+        pytest.param(bytes([82, 255]), {"atom_cache": ATOM_CACHE}, id="index-255"),
+        pytest.param(bytes([82, 0]), {"atom_cache": []}, id="empty-cache"),
+        pytest.param(bytes([82]), {"atom_cache": ATOM_CACHE}, id="no-index"),
+        pytest.param(bytes([82, 0]), {"atom_cache": "abc"}, id="cache-is-str"),
+        pytest.param(bytes([82, 0]), {"atom_cache": [b"a"]}, id="entry-is-bytes"),
+        pytest.param(
+            bytes([103, 82, 9, 0, 0, 0, 1, 0, 0, 0, 0, 1]),
+            {"atom_cache": ATOM_CACHE},
+            id="pid-node-out-of-range",
+        ),
+    ],
+)
+def test_decode_atom_cache_ref_rejected(
+    codec: ModuleType, data: bytes, options: dict[str, Any] | None
+) -> None:
+    with pytest.raises(codec.PyCodecError):
+        codec.binary_to_term_2(data, options)
+    with pytest.raises(codec.PyCodecError):
+        codec.binary_to_term(b"\x83" + data, options)
+
+
+def test_codec_front_door_without_header_byte() -> None:
+    """`term.codec` decodes and encodes terms that have no 131 byte."""
+    from term import codec as front
+
+    options = {"atom_cache": ATOM_CACHE}
+    control, tail = front.binary_to_term_2(ATOM_CACHE_CONTROL + b"\x61\x01", options)
+    assert control == (6, Pid("a@host", 85, 0, 2), Atom("b@host"), Atom("reg"))
+    assert tail == b"\x61\x01"
+    # term_to_binary({a, 1}) on OTP 29 is <<131,104,2,119,1,97,97,1>>
+    assert front.term_to_binary_2((Atom("a"), 1)) == bytes([104, 2, 119, 1, 97, 97, 1])

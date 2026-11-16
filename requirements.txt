@@ -1,3 +1,0 @@
-# Setup/Rust build requires
-setuptools_rust>=0.10.5
-semantic_version>=2.6.0
