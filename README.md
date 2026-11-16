@@ -110,6 +110,30 @@ builds its own release codec and leaves the installed one alone):
 python test/bench/run.py --seconds 1 --cpu 4
 ```
 
+### Debug and release builds in a Pyrlang node
+
+An editable install (`pip install -e .`) builds the native codec in debug
+mode; a wheel, or `pip install .` from source, builds it in release mode
+(`SETUPTOOLS_RUST_CARGO_PROFILE=release pip install -e .` gives an editable
+install with a release build). Pyrlang's load tests show what that means
+for a whole node. Totals over two Pyrlang nodes exchanging traffic with
+three Erlang nodes for 60 s each:
+
+| Traffic | Debug build | Release build | Release vs debug |
+| ------- | ----------: | ------------: | ---------------: |
+| Echo (Erlang → Python → Erlang) | 77 000 msgs/s | 169 000 msgs/s | 2.2× |
+| Fan-out (Python → Erlang) | 79 000 msgs/s | 215 000 msgs/s | 2.7× |
+| `gen_server` calls | 19 800 calls/s | 33 700 calls/s | 1.7× |
+| Relay (Erlang → Python → Erlang) | 27 900 msgs/s | 58 700 msgs/s | 2.1× |
+| Everything at once, full payload mix | 284 MB/s | 632 MB/s | 2.2× |
+| Full payload mix alone | 330 MB/s | 795 MB/s | 2.4× |
+
+On average (geometric mean over the traffic patterns) the release build
+moves 2.2× the traffic of the debug build. Measured on the same machine
+with the WSL virtual machine limited to the eight performance cores,
+CPython 3.13.13 and Erlang/OTP 25.3 and 29.1; Pyrlang's README has the
+latencies and the setup.
+
 ## Atoms
 
 The native representation of atoms are found in `term.atom`. There are Two
