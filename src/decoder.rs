@@ -15,11 +15,12 @@
 use flate2::{Decompress, FlushDecompress, Status};
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyBytes, PyDict, PyInt, PyList, PyTuple};
+use pyo3::types::{PyBool, PyBytes, PyDict, PyInt, PyList, PyString, PyTuple};
 use pyo3::IntoPyObjectExt;
 use std::borrow::Cow;
 use std::str;
 
+use crate::classes::{term_classes, TermClasses};
 use crate::reader::{Readable, Reader};
 
 use super::consts;
@@ -49,23 +50,16 @@ pub struct Decoder<'py> {
     max_depth: usize,
     max_size: usize,
 
-    pub decode_hook: Bound<'py, PyDict>,
+    // The "decode_hook" option; None when it is missing or empty.
+    decode_hook: Option<Bound<'py, PyDict>>,
     // The "atom_call" option: builds every atom from its text when set.
     atom_call: Option<Bound<'py, PyAny>>,
     // The "atom_cache" option: the atom texts ATOM_CACHE_REF indexes, a
     // list or tuple; entries are checked when used.
     atom_cache: Option<Bound<'py, PyAny>>,
-    cached_atom_pyclass: Option<Bound<'py, PyAny>>,
-    // term.atom.Atom, for node names whatever the "atom" option says.
-    cached_node_atom_pyclass: Option<Bound<'py, PyAny>>,
-    cached_pid_pyclass: Option<Bound<'py, PyAny>>,
-    cached_port_pyclass: Option<Bound<'py, PyAny>>,
-    cached_ref_pyclass: Option<Bound<'py, PyAny>>,
-    cached_fun_pyclass: Option<Bound<'py, PyAny>>,
-    cached_export_pyclass: Option<Bound<'py, PyAny>>,
-    cached_record_pyclass: Option<Bound<'py, PyAny>>,
-    cached_improper_list_pyclass: Option<Bound<'py, PyAny>>,
-    cached_bitstring_pyclass: Option<Bound<'py, PyAny>>,
+    // The classes of the values built; node names, module and field names
+    // are always `classes.atom`, whatever the "atom" option says.
+    classes: &'static TermClasses,
 }
 
 /// A compound term whose children are being decoded (see `Decoder::decode`).
@@ -133,22 +127,6 @@ enum Start<'py> {
 enum Progress<'py> {
     Waiting(Frame<'py>),
     Done(Bound<'py, PyAny>, bool),
-}
-
-/// Return the cached Python class from `slot`, or import `module.name`, cache
-/// it in `slot` and return it.
-fn cached_class<'py>(
-    py: Python<'py>,
-    slot: &mut Option<Bound<'py, PyAny>>,
-    module: &str,
-    name: &str,
-) -> PyResult<Bound<'py, PyAny>> {
-    if let Some(cls) = slot {
-        return Ok(cls.clone());
-    }
-    let cls = py.import(module)?.getattr(name)?;
-    *slot = Some(cls.clone());
-    Ok(cls)
 }
 
 /// Read a count field (32 bits, or 8 if `small`) and return it if the input
@@ -221,66 +199,70 @@ fn inflate(input: &[u8], declared: usize, max_size: usize) -> CodecResult<Vec<u8
 impl<'py> Decoder<'py> {
     /// Create decoder instance. Parse options.
     pub fn new(py: Python<'py>, opts: &Bound<'py, PyAny>) -> CodecResult<Decoder<'py>> {
-        // If opts is None, make it empty Dict, otherwise take it as PyDict
-        let opts1 = helpers::maybe_dict(opts)?;
-        let aopt = helpers::get_atom_opt(&opts1)?;
-        let atom_call = match opts1.get_item("atom_call")? {
-            Some(f) if f.is_none() => None,
-            Some(f) if !f.is_callable() => {
-                return Err(CodecError::BadOptions {
-                    txt: "'atom_call' must be callable".to_string(),
-                })
-            }
-            other => other,
+        let mut decoder = Decoder {
+            py,
+            atom_representation: AtomRepresentation::TermAtom,
+            bytestring_repr: ByteStringRepresentation::Str,
+            bitstring_repr: BitstringRepresentation::Tuple,
+            max_depth: DEFAULT_MAX_DEPTH,
+            max_size: DEFAULT_MAX_SIZE,
+            decode_hook: None,
+            atom_call: None,
+            atom_cache: None,
+            classes: term_classes(py)?,
         };
-        let atom_cache = match opts1.get_item("atom_cache")? {
-            Some(c) if c.is_none() => None,
-            Some(c) if !(c.is_instance_of::<PyList>() || c.is_instance_of::<PyTuple>()) => {
-                return Err(CodecError::BadOptions {
-                    txt: "'atom_cache' must be a list or tuple of str".to_string(),
-                })
-            }
-            other => other,
-        };
-        let s8opt = helpers::get_byte_str_opt(&opts1)?;
-        let bitstring_repr = helpers::get_bitstring_opt(&opts1)?;
-        let max_depth = helpers::get_positive_int_opt(&opts1, "max_depth", DEFAULT_MAX_DEPTH)?;
-        let max_size = helpers::get_positive_int_opt(&opts1, "max_size", DEFAULT_MAX_SIZE)?;
+        if let Some(opts1) = helpers::options(opts)? {
+            decoder.read_options(&opts1)?;
+        }
+        Ok(decoder)
+    }
 
-        let decode_hook = match opts1.get_item("decode_hook")? {
-            Some(h1) if h1.is_none() => PyDict::new(py),
-            Some(h1) => match h1.cast_into::<PyDict>() {
-                Ok(d) => d,
-                Err(_) => {
+    /// Set the options given in `opts1`; the others keep their defaults.
+    /// One pass over the dict: pyrlang passes one option with every packet,
+    /// and a lookup per known option cost more than decoding a small term.
+    fn read_options(&mut self, opts1: &Bound<'py, PyDict>) -> CodecResult<()> {
+        for (key, value) in opts1.iter() {
+            let Ok(key) = key.cast::<PyString>() else {
+                continue;
+            };
+            let Ok(key) = key.to_str() else {
+                continue;
+            };
+            match key {
+                "atom" => self.atom_representation = helpers::atom_opt(&value)?,
+                "byte_string" => self.bytestring_repr = helpers::byte_str_opt(&value)?,
+                "bitstring" => self.bitstring_repr = helpers::bitstring_opt(&value)?,
+                "max_depth" => self.max_depth = helpers::positive_int(key, &value)?,
+                "max_size" => self.max_size = helpers::positive_int(key, &value)?,
+                "atom_call" if value.is_none() => self.atom_call = None,
+                "atom_call" if !value.is_callable() => {
                     return Err(CodecError::BadOptions {
-                        txt: "'decode_hook' must be a dict".to_string(),
+                        txt: "'atom_call' must be callable".to_string(),
                     })
                 }
-            },
-            None => PyDict::new(py),
-        };
-
-        Ok(Decoder {
-            py,
-            atom_representation: aopt,
-            bytestring_repr: s8opt,
-            bitstring_repr,
-            max_depth,
-            max_size,
-            decode_hook,
-            atom_call,
-            atom_cache,
-            cached_atom_pyclass: None,
-            cached_node_atom_pyclass: None,
-            cached_pid_pyclass: None,
-            cached_port_pyclass: None,
-            cached_ref_pyclass: None,
-            cached_fun_pyclass: None,
-            cached_export_pyclass: None,
-            cached_record_pyclass: None,
-            cached_improper_list_pyclass: None,
-            cached_bitstring_pyclass: None,
-        })
+                "atom_call" => self.atom_call = Some(value),
+                "atom_cache" if value.is_none() => self.atom_cache = None,
+                "atom_cache"
+                    if !(value.is_instance_of::<PyList>() || value.is_instance_of::<PyTuple>()) =>
+                {
+                    return Err(CodecError::BadOptions {
+                        txt: "'atom_cache' must be a list or tuple of str".to_string(),
+                    })
+                }
+                "atom_cache" => self.atom_cache = Some(value),
+                "decode_hook" if value.is_none() => self.decode_hook = None,
+                "decode_hook" => match value.cast_into::<PyDict>() {
+                    Ok(d) => self.decode_hook = (!d.is_empty()).then_some(d),
+                    Err(_) => {
+                        return Err(CodecError::BadOptions {
+                            txt: "'decode_hook' must be a dict".to_string(),
+                        })
+                    }
+                },
+                _ => {}
+            }
+        }
+        Ok(())
     }
 
     /// Decode one term and return the Python tuple (value, remaining bytes).
@@ -362,11 +344,11 @@ impl<'py> Decoder<'py> {
 
     /// `value` passed through the decode hook for its type name, if any.
     fn apply_hook(&self, value: Bound<'py, PyAny>) -> CodecResult<Bound<'py, PyAny>> {
-        if self.decode_hook.is_empty() {
+        let Some(decode_hook) = &self.decode_hook else {
             return Ok(value);
-        }
+        };
         let type_name = value.get_type().name()?;
-        match self.decode_hook.get_item(type_name)? {
+        match decode_hook.get_item(type_name)? {
             Some(h1) => Ok(h1.call1((value,))?),
             None => Ok(value),
         }
@@ -529,12 +511,7 @@ impl<'py> Decoder<'py> {
                     return Ok(Progress::Done(value, true));
                 }
                 let py_list = PyList::new(self.py, items)?;
-                let cls = cached_class(
-                    self.py,
-                    &mut self.cached_improper_list_pyclass,
-                    "term.list",
-                    "ImproperList",
-                )?;
+                let cls = self.classes.improper_list.bind(self.py);
                 Ok(Progress::Done(cls.call1((py_list, value))?, false))
             }
             Frame::Tuple {
@@ -713,12 +690,7 @@ impl<'py> Decoder<'py> {
         head: RecordHead<'py>,
         fields: Bound<'py, PyDict>,
     ) -> CodecResult<Bound<'py, PyAny>> {
-        let cls = cached_class(
-            self.py,
-            &mut self.cached_record_pyclass,
-            "term.record",
-            "Record",
-        )?;
+        let cls = self.classes.record.bind(self.py);
         Ok(cls.call1((head.module, head.name, head.exported, fields))?)
     }
 
@@ -729,7 +701,7 @@ impl<'py> Decoder<'py> {
         free: Vec<Bound<'py, PyAny>>,
     ) -> CodecResult<Bound<'py, PyAny>> {
         let free_vars = PyList::new(self.py, free)?;
-        let fun_cls = cached_class(self.py, &mut self.cached_fun_pyclass, "term.fun", "Fun")?;
+        let fun_cls = self.classes.fun.bind(self.py);
         Ok(fun_cls.call1((
             head.module,
             head.arity,
@@ -740,16 +712,6 @@ impl<'py> Decoder<'py> {
             head.old_uniq,
             free_vars,
         ))?)
-    }
-
-    /// Return cached value of atom class used for decoding. Otherwise if not
-    /// found - import and cache it locally.
-    fn get_atom_pyclass(&mut self) -> PyResult<Bound<'py, PyAny>> {
-        let name = match self.atom_representation {
-            AtomRepresentation::TermStrictAtom => "StrictAtom",
-            _ => "Atom",
-        };
-        cached_class(self.py, &mut self.cached_atom_pyclass, "term.atom", name)
     }
 
     #[inline]
@@ -817,11 +779,10 @@ impl<'py> Decoder<'py> {
         match self.atom_representation {
             AtomRepresentation::Bytes => Ok(PyBytes::new(self.py, txt.as_bytes()).into_any()),
             AtomRepresentation::Str => Ok(txt.into_bound_py_any(self.py)?),
-            _ => {
-                // Construct Atom object (Note: performance cost)
-                let atom_cls = self.get_atom_pyclass()?;
-                Ok(atom_cls.call1((txt,))?)
+            AtomRepresentation::TermStrictAtom => {
+                Ok(self.classes.strict_atom.bind(self.py).call1((txt,))?)
             }
+            AtomRepresentation::TermAtom => Ok(self.classes.atom.bind(self.py).call1((txt,))?),
         }
     }
 
@@ -867,12 +828,7 @@ impl<'py> Decoder<'py> {
                 Ok(PyTuple::new(self.py, [py_bytes.into_any(), py_bits])?.into_any())
             }
             BitstringRepresentation::BitString => {
-                let cls = cached_class(
-                    self.py,
-                    &mut self.cached_bitstring_pyclass,
-                    "term.bitstring",
-                    "BitString",
-                )?;
+                let cls = self.classes.bitstring.bind(self.py);
                 Ok(cls.call1((py_bytes, py_bits))?)
             }
         }
@@ -920,13 +876,7 @@ impl<'py> Decoder<'py> {
             consts::TAG_ATOM_CACHE_REF => Cow::Owned(self.atom_cache_text(reader)?),
             _ => return Err(CodecError::NotAnAtom { what, b: tag }),
         };
-        let atom_cls = cached_class(
-            self.py,
-            &mut self.cached_node_atom_pyclass,
-            "term.atom",
-            "Atom",
-        )?;
-        Ok(atom_cls.call1((txt,))?)
+        Ok(self.classes.atom.bind(self.py).call1((txt,))?)
     }
 
     /// Given input _after_ the PID tag byte, parse an external pid. ID and
@@ -940,7 +890,7 @@ impl<'py> Decoder<'py> {
         let serial: u32 = reader.read_u32()?;
         let creation = read_tiny_creation(reader, "PID_EXT")?;
 
-        let pid_cls = cached_class(self.py, &mut self.cached_pid_pyclass, "term.pid", "Pid")?;
+        let pid_cls = self.classes.pid.bind(self.py);
         Ok(pid_cls.call1((node, id, serial, creation))?)
     }
 
@@ -953,7 +903,7 @@ impl<'py> Decoder<'py> {
         let serial: u32 = reader.read_u32()?;
         let creation: u32 = reader.read_u32()?;
 
-        let pid_cls = cached_class(self.py, &mut self.cached_pid_pyclass, "term.pid", "Pid")?;
+        let pid_cls = self.classes.pid.bind(self.py);
         Ok(pid_cls.call1((node, id, serial, creation))?)
     }
 
@@ -962,12 +912,7 @@ impl<'py> Decoder<'py> {
         let module = self.decode_plain_atom(reader, "EXPORT_EXT module")?;
         let function = self.decode_plain_atom(reader, "EXPORT_EXT function")?;
         let arity = read_export_arity(reader)?;
-        let cls = cached_class(
-            self.py,
-            &mut self.cached_export_pyclass,
-            "term.fun",
-            "Export",
-        )?;
+        let cls = self.classes.export.bind(self.py);
         Ok(cls.call1((module, function, arity))?)
     }
 
@@ -986,7 +931,7 @@ impl<'py> Decoder<'py> {
         } else {
             reader.read_u32()?
         };
-        let port_cls = cached_class(self.py, &mut self.cached_port_pyclass, "term.port", "Port")?;
+        let port_cls = self.classes.port.bind(self.py);
         Ok(port_cls.call1((node, id, creation))?)
     }
 
@@ -1026,12 +971,7 @@ impl<'py> Decoder<'py> {
         id: &[u8],
     ) -> CodecResult<Bound<'py, PyAny>> {
         let bytes_id = PyBytes::new(self.py, id);
-        let ref_cls = cached_class(
-            self.py,
-            &mut self.cached_ref_pyclass,
-            "term.reference",
-            "Reference",
-        )?;
+        let ref_cls = self.classes.reference.bind(self.py);
         Ok(ref_cls.call1((node, creation, bytes_id))?)
     }
 }

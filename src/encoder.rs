@@ -14,10 +14,12 @@
 
 use crate::helpers::VecWriteExt;
 
+use super::classes;
 use super::consts;
 use super::decoder;
 use super::errors::{CodecError, CodecResult};
 use super::helpers;
+use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyBytes, PyDict, PyInt, PyList, PyString, PyTuple};
 use std::borrow::Cow;
@@ -26,10 +28,9 @@ use std::collections::HashSet;
 pub struct Encoder<'py> {
     pub py: Python<'py>, // Python instance will live at least as long as Encoder
     pub data: Vec<u8>,
-    pub encode_hook: Bound<'py, PyDict>,
-    pub catch_all: Option<Bound<'py, PyAny>>,
-    // A function py_codec_impl.generic_serialize_object used for unknown classes
-    pub cached_generic_serialize_fn: Option<Bound<'py, PyAny>>,
+    // The "encode_hook" option; None when it is missing or empty.
+    encode_hook: Option<Bound<'py, PyDict>>,
+    catch_all: Option<Bound<'py, PyAny>>,
     // Option "max_depth": how deeply compound values may nest.
     max_depth: usize,
 }
@@ -103,6 +104,41 @@ fn patch_fun_size(data: &mut [u8], at: usize) -> CodecResult<()> {
     Ok(())
 }
 
+/// Open frames up to this depth are checked for a cycle by scanning the
+/// stack; deeper ones by a set (TERM-24: a set per call cost as much as
+/// encoding a small term).
+const SCAN_DEPTH: usize = 32;
+
+/// The containers of the open frames, for finding a value that contains
+/// itself. Empty until the stack first grows past `SCAN_DEPTH`; from then on
+/// it holds the address of every open container.
+#[derive(Default)]
+struct OpenSet {
+    deep: Option<HashSet<usize>>,
+}
+
+impl OpenSet {
+    /// Note `container` as open above `stack`; false if it is open already.
+    fn insert(&mut self, stack: &[Frame<'_>], container: &Bound<'_, PyAny>) -> bool {
+        let addr = container.as_ptr() as usize;
+        if self.deep.is_none() {
+            if stack.len() < SCAN_DEPTH {
+                return !stack.iter().any(|f| f.container.is(container));
+            }
+            let set = stack.iter().map(|f| f.container.as_ptr() as usize);
+            self.deep = Some(set.collect());
+        }
+        self.deep.as_mut().is_some_and(|set| set.insert(addr))
+    }
+
+    /// Note `container` as closed.
+    fn remove(&mut self, container: &Bound<'_, PyAny>) {
+        if let Some(set) = &mut self.deep {
+            set.remove(&(container.as_ptr() as usize));
+        }
+    }
+}
+
 /// What starting to encode a value gives.
 enum Step<'py> {
     /// The value is written.
@@ -130,23 +166,24 @@ fn length_u32(size: usize) -> CodecResult<u32> {
 
 impl<'py> Encoder<'py> {
     pub fn new(py: Python<'py>, opt: &Bound<'py, PyAny>) -> CodecResult<Encoder<'py>> {
-        let py_opts = helpers::maybe_dict(opt)?;
-        let encode_hook = match py_opts.get_item("encode_hook")? {
-            Some(h1) => h1.cast_into::<PyDict>()?,
-            None => PyDict::new(py),
-        };
-        let catch_all = encode_hook.get_item("catch_all")?;
-        let max_depth =
-            helpers::get_positive_int_opt(&py_opts, "max_depth", decoder::DEFAULT_MAX_DEPTH)?;
-
-        Ok(Encoder {
+        let mut encoder = Encoder {
             py,
             data: Vec::with_capacity(32),
-            encode_hook,
-            catch_all,
-            cached_generic_serialize_fn: None,
-            max_depth,
-        })
+            encode_hook: None,
+            catch_all: None,
+            max_depth: decoder::DEFAULT_MAX_DEPTH,
+        };
+        let Some(py_opts) = helpers::options(opt)? else {
+            return Ok(encoder);
+        };
+        if let Some(h1) = py_opts.get_item(intern!(py, "encode_hook"))? {
+            let hooks = h1.cast_into::<PyDict>()?;
+            encoder.catch_all = hooks.get_item(intern!(py, "catch_all"))?;
+            encoder.encode_hook = (!hooks.is_empty()).then_some(hooks);
+        }
+        encoder.max_depth =
+            helpers::get_positive_int_opt(&py_opts, "max_depth", decoder::DEFAULT_MAX_DEPTH)?;
+        Ok(encoder)
     }
 
     /// Encode a value and append it to `data`.
@@ -158,7 +195,7 @@ impl<'py> Encoder<'py> {
     /// values with no encoding of their own).
     pub fn encode(&mut self, py_term: &Bound<'py, PyAny>) -> CodecResult<()> {
         let mut stack: Vec<Frame<'py>> = Vec::new();
-        let mut open: HashSet<usize> = HashSet::new();
+        let mut open = OpenSet::default();
         let mut value = py_term.clone();
         let mut substitutions = 0usize;
         loop {
@@ -179,7 +216,7 @@ impl<'py> Encoder<'py> {
                             max_depth: self.max_depth,
                         });
                     }
-                    if !open.insert(frame.container.as_ptr() as usize) {
+                    if !open.insert(&stack, &frame.container) {
                         let type_name = frame.container.get_type().name()?.to_string();
                         return Err(CodecError::Cyclic { type_name });
                     }
@@ -197,7 +234,7 @@ impl<'py> Encoder<'py> {
                     value = child;
                     break;
                 }
-                open.remove(&(frame.container.as_ptr() as usize));
+                open.remove(&frame.container);
                 stack.pop();
             }
         }
@@ -208,9 +245,9 @@ impl<'py> Encoder<'py> {
     /// (`__name__`) of the value is in encode_hook, what the hook returns is
     /// used instead.
     fn start_value(&mut self, py_term: &Bound<'py, PyAny>) -> CodecResult<Step<'py>> {
-        if !self.encode_hook.is_empty() {
+        if let Some(encode_hook) = &self.encode_hook {
             let type_name = py_term.get_type().name()?;
-            if let Some(h1) = self.encode_hook.get_item(type_name)? {
+            if let Some(h1) = encode_hook.get_item(type_name)? {
                 let repr1 = h1.call1((py_term,))?;
                 return self.start_default(&repr1);
             }
@@ -341,18 +378,10 @@ impl<'py> Encoder<'py> {
         if let Some(h1) = &self.catch_all {
             return Ok(h1.call1((py_term,))?);
         }
-        if let Ok(h2) = py_term.getattr("__etf__") {
+        if let Ok(h2) = py_term.getattr(intern!(self.py, "__etf__")) {
             return Ok(h2.call0()?);
         }
-        let py_fn = match &self.cached_generic_serialize_fn {
-            Some(a) => a.clone(),
-            None => {
-                let pyimpl_m = self.py.import("term.py_codec_impl")?;
-                let generic_fn = pyimpl_m.getattr("generic_serialize_object")?;
-                self.cached_generic_serialize_fn = Some(generic_fn.clone());
-                generic_fn
-            }
-        };
+        let py_fn = classes::generic_serialize(self.py)?;
         let result_pair = py_fn.call1((py_term, self.py.None()))?;
         let py_pair = result_pair.cast::<PyTuple>()?;
         Ok(py_pair.get_item(0)?)

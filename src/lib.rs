@@ -18,6 +18,7 @@ use pyo3::types::PyBytes;
 use self::decoder::Decoder;
 use self::encoder::Encoder;
 
+mod classes;
 mod consts;
 mod decoder;
 mod encoder;

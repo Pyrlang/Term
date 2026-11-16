@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- The native codec costs less per call: the term classes are imported once
+  per process instead of once per call, and options `None` or `{}` are not
+  parsed at all. Decoding a small term such as a distribution control
+  message takes a third of the time it did, encoding one about three
+  quarters.
 - Both decoders refuse a map whose keys are different in Erlang and equal
   in Python (`#{1 => a, 1.0 => b}`, `true` and `1`, `0.0` and `-0.0`, an
   atom and a string of the same text, tuples of these) with `PyCodecError`.

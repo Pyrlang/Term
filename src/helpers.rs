@@ -17,25 +17,19 @@ use pyo3::types::{PyDict, PyInt, PyString};
 
 use super::errors::{CodecError, CodecResult};
 
-/// Get dict value with string key, expect it to be string too, or return
-/// the default value.
-pub fn get_str_opt(opts: &Bound<'_, PyDict>, optname: &str, default: &str) -> CodecResult<String> {
-    match opts.get_item(optname)? {
-        Some(val) => {
-            let py_str = val.cast::<PyString>()?;
-            Ok(py_str.to_string_lossy().into_owned())
-        }
-        None => Ok(default.to_string()),
-    }
+/// The text of a str option value.
+fn str_value(val: &Bound<'_, PyAny>) -> CodecResult<String> {
+    Ok(val.cast::<PyString>()?.to_string_lossy().into_owned())
 }
 
-/// Given a dict or a possibly None, return dict
-pub fn maybe_dict<'py>(dict_or_none: &Bound<'py, PyAny>) -> CodecResult<Bound<'py, PyDict>> {
-    if dict_or_none.is_none() {
-        Ok(PyDict::new(dict_or_none.py()))
-    } else {
-        Ok(dict_or_none.cast::<PyDict>()?.clone())
+/// The options dict to read, or None when every option keeps its default:
+/// for `None` and for `{}` no option is looked up (TERM-24).
+pub fn options<'py>(opt: &Bound<'py, PyAny>) -> CodecResult<Option<Bound<'py, PyDict>>> {
+    if opt.is_none() {
+        return Ok(None);
     }
+    let dict = opt.cast::<PyDict>()?;
+    Ok((!dict.is_empty()).then(|| dict.clone()))
 }
 
 /// Get dict value with string key, expect a positive int (a size or a
@@ -45,16 +39,21 @@ pub fn get_positive_int_opt(
     optname: &str,
     default: usize,
 ) -> CodecResult<usize> {
-    let Some(val) = opts.get_item(optname)? else {
-        return Ok(default);
-    };
+    match opts.get_item(PyString::intern(opts.py(), optname))? {
+        Some(val) => positive_int(optname, &val),
+        None => Ok(default),
+    }
+}
+
+/// The value of an option that is a positive int (a size or a limit).
+pub fn positive_int(optname: &str, val: &Bound<'_, PyAny>) -> CodecResult<usize> {
     // bool is an int subclass in Python, but not a size
     if !val.is_exact_instance_of::<PyInt>() {
-        return Err(bad_positive_int(optname, &val));
+        return Err(bad_positive_int(optname, val));
     }
     match val.extract::<usize>() {
         Ok(n) if n > 0 => Ok(n),
-        _ => Err(bad_positive_int(optname, &val)),
+        _ => Err(bad_positive_int(optname, val)),
     }
 }
 
@@ -80,8 +79,8 @@ pub enum ByteStringRepresentation {
 }
 
 /// Option: "atom" => "bytes" | "str" | "Atom" | "StrictAtom" (as Atom class, default)
-pub fn get_atom_opt(opts1: &Bound<'_, PyDict>) -> CodecResult<AtomRepresentation> {
-    let opt_s = get_str_opt(opts1, "atom", "Atom")?;
+pub fn atom_opt(val: &Bound<'_, PyAny>) -> CodecResult<AtomRepresentation> {
+    let opt_s = str_value(val)?;
     match opt_s.as_ref() {
         "bytes" => Ok(AtomRepresentation::Bytes),
         "str" => Ok(AtomRepresentation::Str),
@@ -98,8 +97,8 @@ pub fn get_atom_opt(opts1: &Bound<'_, PyDict>) -> CodecResult<AtomRepresentation
 }
 
 /// Option: "byte_string" => "bytes" | "str" | "int_list" (default: str)
-pub fn get_byte_str_opt(opts1: &Bound<'_, PyDict>) -> CodecResult<ByteStringRepresentation> {
-    let opt_s: String = get_str_opt(opts1, "byte_string", "str")?;
+pub fn byte_str_opt(val: &Bound<'_, PyAny>) -> CodecResult<ByteStringRepresentation> {
+    let opt_s = str_value(val)?;
     match opt_s.as_ref() {
         "bytes" => Ok(ByteStringRepresentation::Bytes),
         "str" => Ok(ByteStringRepresentation::Str),
@@ -122,8 +121,8 @@ pub enum BitstringRepresentation {
 }
 
 /// Option: "bitstring" => "tuple" (default) | "BitString"
-pub fn get_bitstring_opt(opts1: &Bound<'_, PyDict>) -> CodecResult<BitstringRepresentation> {
-    let opt_s = get_str_opt(opts1, "bitstring", "tuple")?;
+pub fn bitstring_opt(val: &Bound<'_, PyAny>) -> CodecResult<BitstringRepresentation> {
+    let opt_s = str_value(val)?;
     match opt_s.as_ref() {
         "tuple" => Ok(BitstringRepresentation::Tuple),
         "BitString" => Ok(BitstringRepresentation::BitString),
