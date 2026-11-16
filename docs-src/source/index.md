@@ -15,10 +15,10 @@ the Erlang External Term Format (ETF), the format of `term_to_binary/1`,
 
 Term is one of three projects that work together and can be used apart:
 
-- [Pyrlang]({{ pyrlang_url }}): an Erlang node in Python. It uses Term for
+- {{ pyrlang_site }}: an Erlang node in Python. It uses Term for
   every message.
 - Term: this project.
-- [Epmd]({{ epmd_url }}): an Erlang Port Mapper Daemon in Python.
+- {{ epmd_site }}: an Erlang Port Mapper Daemon in Python.
 
 ## Installing
 
@@ -28,7 +28,7 @@ pip install pyrlang-term
 
 Wheels are published for Linux, Windows and macOS. One wheel serves every
 CPython from 3.11 on and contains the native codec. Where no wheel fits, pip
-builds from source: with a [Rust toolchain](https://www.rust-lang.org/tools/install)
+builds from source: with a [Rust toolchain](https://rust-lang.org/tools/install/)
 you get the native codec, without one the Python codec only.
 
 From a clone of <https://github.com/Pyrlang/Term>:

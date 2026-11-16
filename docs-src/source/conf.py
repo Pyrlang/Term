@@ -67,9 +67,10 @@ intersphinx_mapping = {"python": ("https://docs.python.org/3", None)}
 html_theme = "furo"
 html_title = "Term %s" % release
 html_baseurl = DOCS_BASE_URL + "/term/"
-# Addresses of the sibling sites, for the links on the index page.
+# Links to the sibling sites, for use in the pages as {{ term_site }}.
+# Whole links: MyST substitutes text, not the URL inside [text](url).
 myst_substitutions = {
-    "pyrlang_url": DOCS_BASE_URL + "/pyrlang/",
-    "epmd_url": DOCS_BASE_URL + "/epmd/",
+    "pyrlang_site": "[Pyrlang](%s/pyrlang/)" % DOCS_BASE_URL,
+    "epmd_site": "[Epmd](%s/epmd/)" % DOCS_BASE_URL,
 }
 myst_enable_extensions = ["substitution"]
