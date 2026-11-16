@@ -61,42 +61,45 @@ Measured on Linux (WSL2, Intel i9-14900KF, one pinned core) with CPython
 
 | workload | op | Python µs | Rust µs | OTP µs | Rust vs Python | OTP vs Rust |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| atoms_200_unicode | decode | 125 | 19.9 | 5.18 | 6.30× | 3.83× |
-| atoms_200_unicode | encode | 63.9 | 7.42 | 1.55 | 8.61× | 4.80× |
-| bignums_1000 | decode | 788 | 167 | 33.6 | 4.73× | 4.95× |
-| bignums_1000 | encode | 352 | 330 | 14.6 | 1.07× | 22.6× |
-| binary_1mb | decode | 23.5 | 20.1 | 26.7 | 1.17× | 0.756× |
-| binary_1mb | encode | 495 | 460 | 28.7 | 1.08× | 16.0× |
-| dist_control | decode | 4.15 | 1.45 | 0.115 | 2.87× | 12.6× |
-| dist_control | encode | 2.04 | 0.610 | 0.071 | 3.35× | 8.54× |
-| fixtures_golden | decode | 23808 | 1682 | 696 | 14.2× | 2.42× |
-| fixtures_golden | encode | 12833 | 2254 | 574 | 5.69× | 3.93× |
-| fixtures_otp | decode | 4491 | 1167 | 253 | 3.85× | 4.61× |
-| fixtures_otp | encode | 2327 | 660 | 69.1 | 3.52× | 9.55× |
-| floats_10k | decode | 5512 | 269 | 104 | 20.5× | 2.60× |
-| floats_10k | encode | 2459 | 330 | 42.5 | 7.45× | 7.78× |
-| gen_call | decode | 14.5 | 3.37 | 0.435 | 4.31× | 7.74× |
-| gen_call | encode | 9.64 | 1.84 | 0.261 | 5.23× | 7.06× |
-| list_100k_ints | decode | 43646 | 3396 | 637 | 12.9× | 5.33× |
-| list_100k_ints | encode | 27173 | 3192 | 419 | 8.51× | 7.61× |
-| map_10k_atom_keys | decode | 11620 | 1251 | 1133 | 9.29× | 1.10× |
-| map_10k_atom_keys | encode | 7023 | 1042 | 291 | 6.74× | 3.59× |
-| nested_1000 | decode | 671 | 61.2 | 8.66 | 11.0× | 7.07× |
-| nested_1000 | encode | 425 | 70.0 | 7.01 | 6.07× | 9.99× |
-| pids_refs_1000 | decode | 3676 | 427 | 127 | 8.60× | 3.35× |
-| pids_refs_1000 | encode | 1699 | 484 | 29.0 | 3.51× | 16.7× |
-| string_65535 | decode | 4.74 | 35.2 | 252 | 0.135× | 0.140× |
-| string_65535 | encode | 4.48 | 52.5 | 189 | 0.085× | 0.278× |
-| tuples_10k | decode | 23251 | 1548 | 436 | 15.0× | 3.55× |
-| tuples_10k | encode | 15949 | 1530 | 295 | 10.4× | 5.18× |
+| atoms_200_unicode | decode | 116 | 16.0 | 4.98 | 7.24× | 3.21× |
+| atoms_200_unicode | encode | 58.8 | 4.34 | 1.45 | 13.6× | 3.00× |
+| bignums_1000 | decode | 737 | 139 | 31.7 | 5.31× | 4.38× |
+| bignums_1000 | encode | 325 | 130 | 13.9 | 2.51× | 9.32× |
+| binary_1mb | decode | 21.1 | 18.2 | 25.1 | 1.16× | 0.727× |
+| binary_1mb | encode | 443 | 28.9 | 26.9 | 15.3× | 1.08× |
+| dist_control | decode | 3.97 | 0.401 | 0.108 | 9.89× | 3.72× |
+| dist_control | encode | 1.92 | 0.234 | 0.069 | 8.18× | 3.39× |
+| fixtures_golden | decode | 21786 | 506 | 661 | 43.0× | 0.766× |
+| fixtures_golden | encode | 11599 | 639 | 545 | 18.1× | 1.17× |
+| fixtures_otp | decode | 4105 | 549 | 238 | 7.48× | 2.30× |
+| fixtures_otp | encode | 2097 | 236 | 65.9 | 8.89× | 3.58× |
+| floats_10k | decode | 5123 | 103 | 97.3 | 49.9× | 1.06× |
+| floats_10k | encode | 2204 | 95.8 | 40.1 | 23.0× | 2.39× |
+| gen_call | decode | 13.4 | 1.45 | 0.424 | 9.24× | 3.42× |
+| gen_call | encode | 8.69 | 0.827 | 0.254 | 10.5× | 3.26× |
+| list_100k_ints | decode | 40101 | 1458 | 602 | 27.5× | 2.42× |
+| list_100k_ints | encode | 24955 | 964 | 400 | 25.9× | 2.41× |
+| map_10k_atom_keys | decode | 10741 | 1060 | 1081 | 10.1× | 0.980× |
+| map_10k_atom_keys | encode | 6354 | 598 | 271 | 10.6× | 2.20× |
+| nested_1000 | decode | 619 | 35.0 | 8.03 | 17.7× | 4.35× |
+| nested_1000 | encode | 388 | 50.2 | 6.72 | 7.72× | 7.47× |
+| pids_refs_1000 | decode | 3406 | 371 | 129 | 9.18× | 2.88× |
+| pids_refs_1000 | encode | 1576 | 138 | 28.3 | 11.4× | 4.87× |
+| string_65535 | decode | 4.50 | 4.05 | 230 | 1.11× | 0.018× |
+| string_65535 | encode | 4.20 | 2.55 | 178 | 1.65× | 0.014× |
+| tuples_10k | decode | 21954 | 1313 | 415 | 16.7× | 3.16× |
+| tuples_10k | encode | 14450 | 656 | 282 | 22.0× | 2.33× |
 
+- The native codec is faster than the Python codec on every workload, and
+  within 10x of OTP on all of them; it is about as fast as OTP on large
+  binaries and on decoding floats and maps, and the slowest relative to
+  OTP on bignum encoding (Python's `int` has no cheap byte export in the limited API).
 - OTP builds terms on a process heap with no foreign-function calls; our
   codecs build CPython objects. The comparison shows the distance to OTP,
   it is not like for like.
 - `string_65535`: an Erlang string is a list of integers, which OTP has to
   build or walk element by element; we produce one flat `str`. With the same
-  bytes as a binary OTP is as fast as on `binary_1mb`. On this workload the
-  Python codec is faster than the native one; that is a known defect.
+  bytes as a binary OTP is as fast as on `binary_1mb`.
 - `fixtures_golden` and `fixtures_otp` are the test corpora (`test/fixtures`),
   every file of the set in one call.
 
