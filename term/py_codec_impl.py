@@ -670,12 +670,20 @@ class _Frame:
                 return self, False
             key = self.key_
             self.key_ = _NO_KEY
+            before = len(self.items_)
             try:
                 self.items_[key] = value
             except TypeError as e:
                 raise PyCodecError(
                     "Map key of type %s is not hashable" % type(key).__name__
                 ) from e
+            if len(self.items_) == before:
+                # Erlang's 1, 1.0 and true are three keys, Python's are one:
+                # the dict would lose an entry without telling anyone.
+                raise PyCodecError(
+                    "Map key of type %s equals an earlier key of the map in "
+                    "Python" % type(key).__name__
+                )
             self.remaining_ -= 1
             return (self, False) if self.remaining_ else (self.items_, False)
         if kind == _LIST_TAIL:

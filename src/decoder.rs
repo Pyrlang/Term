@@ -565,12 +565,19 @@ impl<'py> Decoder<'py> {
                 key: Some(key),
                 remaining,
             } => {
+                let before = dict.len();
                 if let Err(error) = dict.set_item(&key, value) {
                     if !error.is_instance_of::<PyTypeError>(self.py) {
                         return Err(error.into());
                     }
                     let type_name = key.get_type().name()?.to_string();
                     return Err(CodecError::UnhashableKey { type_name, error });
+                }
+                if dict.len() == before {
+                    // Erlang's 1, 1.0 and true are three keys, Python's are
+                    // one: the dict would lose an entry without telling anyone.
+                    let type_name = key.get_type().name()?.to_string();
+                    return Err(CodecError::MapKeysCollide { type_name });
                 }
                 let remaining = remaining.saturating_sub(1);
                 if remaining == 0 {

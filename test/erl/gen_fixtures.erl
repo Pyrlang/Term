@@ -152,8 +152,9 @@ features_text(Features) ->
 %%   bytes), float_ext (a float written with {minor_version, 0}),
 %%   int_bits_32 (2^31 =< |I| < 2^32, except -2^31), str_latin1 (a list
 %%   written as STRING_EXT holding a byte >= 128), unhashable_key (a map key
-%%   whose Python value would be a list or a dict), local_ext (written with
-%%   the `local` option: only this node can decode it).
+%%   whose Python value would be a list or a dict), colliding_keys (a map
+%%   with keys whose Python values are equal: 1, 1.0 and true), local_ext
+%%   (written with the `local` option: only this node can decode it).
 features(Term, Opts) ->
     Local = [local_ext || lists:member(local, Opts)],
     lists:usort(Local ++ feat(Term, lists:member({minor_version, 0}, Opts), [])).
@@ -185,7 +186,12 @@ feat(T, F0, Acc) when is_list(T) ->
     feat_list(T, F0, Acc1);
 feat(T, F0, Acc) when is_tuple(T) ->
     feat_list(tuple_to_list(T), F0, Acc);
-feat(T, F0, Acc) when is_map(T) ->
+feat(T, F0, Acc0) when is_map(T) ->
+    PyKeys = [py_key(K) || K <- maps:keys(T)],
+    Acc = case length(lists:usort(PyKeys)) < map_size(T) of
+              true -> [colliding_keys | Acc0];
+              false -> Acc0
+          end,
     maps:fold(fun(K, V, A) ->
                       A1 = case py_hashable(K) of
                                true -> A;
@@ -215,6 +221,32 @@ py_hashable(K) when is_list(K) -> is_string_ext(K);
 py_hashable(K) when is_map(K) -> false;
 py_hashable(K) when is_tuple(K) -> lists:all(fun py_hashable/1, tuple_to_list(K));
 py_hashable(_) -> true.
+
+%% A stand-in for the Python value of a map key: keys with the same stand-in
+%% are equal in Python (1 == 1.0 == True, 0.0 == -0.0, Atom("a") == "a",
+%% <<5:7>> decodes to a tuple of bytes and 7), so one dict cannot hold both.
+py_key(true) -> {num, 1};
+py_key(false) -> {num, 0};
+py_key(K) when is_integer(K) -> {num, K};
+py_key(K) when is_float(K) ->
+    case trunc(K) == K of
+        true -> {num, trunc(K)};
+        false -> {float, K}
+    end;
+py_key(K) when is_atom(K) -> {str, atom_to_list(K)};
+py_key(K) when is_binary(K) -> {bin, K};
+py_key(K) when is_bitstring(K) ->
+    Bits = bit_size(K) rem 8,
+    Whole = bit_size(K) - Bits,
+    <<Bytes:Whole/bits, Last:Bits>> = K,
+    {tuple, [{bin, <<Bytes/binary, (Last bsl (8 - Bits))>>}, {num, Bits}]};
+py_key(K) when is_tuple(K) -> {tuple, [py_key(E) || E <- tuple_to_list(K)]};
+py_key(K) when is_list(K) ->
+    case is_string_ext(K) of
+        true -> {str, K};
+        false -> {other, K}
+    end;
+py_key(K) -> {other, K}.
 
 -if(?OTP_RELEASE >= 29).
 is_native_record(T) -> erlang:is_record(T).
@@ -346,7 +378,13 @@ maps() ->
      ?F(map_32, stable, maps:from_list([{K, K} || K <- lists:seq(1, 32)])),
      ?F(map_33, stable, maps:from_list([{K, K} || K <- lists:seq(1, 33)])),
      ?F(map_list_key, stable, #{[a, b] => 1}),
-     ?F(map_map_key, stable, #{#{a => 1} => 2})].
+     ?F(map_map_key, stable, #{#{a => 1} => 2}),
+     %% Keys that are different in Erlang and equal in Python (TERM-23).
+     ?F(map_int_float_key, stable, #{1 => a, 1.0 => b}),
+     ?F(map_true_int_key, stable, #{true => x, 1 => y}),
+     ?F(map_tuple_int_float_key, stable, #{{1} => a, {1.0} => b}),
+     ?F(map_zero_keys, stable, #{0.0 => a, -0.0 => b}),
+     ?F(map_atom_string_key, stable, #{abc => a, "abc" => b})].
 
 binaries() ->
     [?F(bin_empty, stable, <<>>),

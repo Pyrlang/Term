@@ -1591,6 +1591,41 @@ def test_unhashable_map_key(codec: ModuleType, name: str, key_type: str) -> None
     assert isinstance(info.value.__cause__, TypeError)
 
 
+@pytest.mark.parametrize(
+    "name, key_type",
+    [
+        ("map_int_float_key", "float"),  # #{1 => a, 1.0 => b}
+        ("map_true_int_key", "bool"),  # #{true => x, 1 => y}
+        ("map_tuple_int_float_key", "tuple"),  # #{{1} => a, {1.0} => b}
+        ("map_zero_keys", "float"),  # #{0.0 => a, -0.0 => b}
+        ("map_atom_string_key", "str"),  # #{abc => a, "abc" => b}
+    ],
+)
+def test_map_keys_equal_in_python(codec: ModuleType, name: str, key_type: str) -> None:
+    """A map whose keys differ in Erlang but are one key in Python is
+    refused: a dict would drop entries (TERM-23). Bytes written by OTP 29."""
+    data = (FIXTURE_DIR / (name + ".etf")).read_bytes()
+    with pytest.raises(
+        codec.PyCodecError, match="key of type %s equals an earlier key" % key_type
+    ):
+        codec.binary_to_term(data, None)
+
+
+def test_map_keys_equal_in_python_nested(codec: ModuleType) -> None:
+    """The check holds for a map inside another term, and a map whose keys
+    stay apart in Python still decodes."""
+    inner = (FIXTURE_DIR / "map_int_float_key.etf").read_bytes()[1:]
+    with pytest.raises(codec.PyCodecError, match="equals an earlier key"):
+        codec.binary_to_term(bytes([131, 104, 2, 97, 7]) + inner, None)
+    # #{1 => a, 1.5 => b}, as OTP 29 writes it.
+    apart = bytes(
+        [131, 116, 0, 0, 0, 2, 97, 1, 119, 1, 97]
+        + [70, 63, 248, 0, 0, 0, 0, 0, 0, 119, 1, 98]
+    )
+    value, tail = codec.binary_to_term(apart, None)
+    assert value == {1: Atom("a"), 1.5: Atom("b")} and tail == b""
+
+
 def test_improper_list_falsy_tail(codec: ModuleType) -> None:
     """[1|0] and [1|undefined] as OTP 29 writes them keep their tails."""
     zero = bytes([131, 108, 0, 0, 0, 1, 97, 1, 97, 0])

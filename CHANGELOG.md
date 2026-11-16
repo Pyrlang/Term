@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Both decoders refuse a map whose keys are different in Erlang and equal
+  in Python (`#{1 => a, 1.0 => b}`, `true` and `1`, `0.0` and `-0.0`, an
+  atom and a string of the same text, tuples of these) with `PyCodecError`.
+  Such a map used to decode to a dict with fewer entries, without an error.
 - New decode option `"atom_cache"`: a list or tuple of atom texts that
   `ATOM_CACHE_REF` (tag 82) refers to, for terms that follow a distribution
   header. Without the option tag 82 raises `PyCodecError`.

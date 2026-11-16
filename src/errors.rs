@@ -77,6 +77,9 @@ pub enum CodecError {
     // A decoded map key that a Python dict cannot hold (a list, a dict).
     #[error("Map key of type {type_name} is not hashable")]
     UnhashableKey { type_name: String, error: PyErr },
+    // A decoded map key equal in Python to an earlier key (1, 1.0 and true).
+    #[error("Map key of type {type_name} equals an earlier key of the map in Python")]
+    MapKeysCollide { type_name: String },
     // term_to_binary(T, [local]) output: private to the node that wrote it.
     #[error(
         "LOCAL_EXT (term_to_binary with the local option) can only be decoded by the node that encoded it"

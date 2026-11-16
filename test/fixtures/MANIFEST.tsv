@@ -48,6 +48,11 @@ map_32	29	stable	maps:from_list([  {K, K} || K <- lists:seq(1, 32) ])	[]
 map_33	29	stable	maps:from_list([  {K, K} || K <- lists:seq(1, 33) ])	[]	
 map_list_key	29	stable	#{[a, b] => 1}	[]	unhashable_key
 map_map_key	29	stable	#{#{a => 1} => 2}	[]	unhashable_key
+map_int_float_key	29	stable	#{1 => a, 1.0 => b}	[]	colliding_keys
+map_true_int_key	29	stable	#{true => x, 1 => y}	[]	colliding_keys
+map_tuple_int_float_key	29	stable	#{{1} => a, {1.0} => b}	[]	colliding_keys
+map_zero_keys	29	stable	#{0.0 => a, -0.0 => b}	[]	colliding_keys
+map_atom_string_key	29	stable	#{abc => a, "abc" => b}	[]	colliding_keys
 bin_empty	29	stable	<<>>	[]	
 bin_1_2_3	29	stable	<<1,2,3>>	[]	
 bits_1_1	29	stable	<<1:1>>	[]	bitstring
