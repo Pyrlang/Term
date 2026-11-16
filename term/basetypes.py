@@ -1,3 +1,6 @@
+"""Base classes of the term classes, and the type ``Term`` of a decoded
+value."""
+
 from typing import Any, List, Union
 
 

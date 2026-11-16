@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+"""Erlang port identifiers."""
+
 from term.atom import Atom
 from term.basetypes import BaseTerm
 

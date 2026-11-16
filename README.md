@@ -160,7 +160,7 @@ the return value will be used for the atom representation. Only `Atom` and
 `StrictAtom` can be natively parsed back to atom when decoded. If you roll your
 own, make sure to use `encode_hook` when encoding.
 
-More Documentation
--------------
+## Documentation
 
-Here: https://pyrlang.github.io/Term/
+Data types, codec options, the API reference and the known differences
+from Erlang/OTP: https://pyrlang.github.io/term/

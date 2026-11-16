@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+"""Erlang process identifiers."""
+
 from typing import Protocol
 
 from term.basetypes import BasePid
@@ -62,6 +64,7 @@ class Pid(BasePid):
         return self.__repr__()
 
     def equals(self, other: object) -> bool:
+        """True if ``other`` is the same pid: node, id, serial and creation."""
         return (
             isinstance(other, Pid)
             and self.node_name_ == other.node_name_

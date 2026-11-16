@@ -1,4 +1,8 @@
-# This directory is also a Python package
+"""Erlang terms as Python values, and the External Term Format codec.
+
+The classes for the Erlang types that Python has no equivalent of are
+exported here; the codec is :py:mod:`term.codec`.
+"""
 
 from term.atom import Atom
 from term.bitstring import BitString

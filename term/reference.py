@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+"""Erlang references."""
+
 import itertools
 import random
 import struct
@@ -82,6 +84,7 @@ class Reference(BaseRef):
     # Eq, Ne and Hash are used for having this class as a dict key
 
     def equals(self, other: object) -> bool:
+        """True if ``other`` is the same reference: node, creation and id."""
         return (
             isinstance(other, Reference)
             and self.node_name_ == other.node_name_

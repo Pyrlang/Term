@@ -1,3 +1,5 @@
+"""Bitstrings whose length is not a whole number of bytes."""
+
 from term.basetypes import BaseTerm
 
 # Mixed into the hash so that a BitString never hashes like its plain tuple.
