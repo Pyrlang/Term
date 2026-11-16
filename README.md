@@ -48,6 +48,7 @@ from `PATH`, or the one named by `$PYRLANG_ERL`, and skip when there is none.
 
 ## Performance
 
+<!-- performance-start -->
 Median time of one call in microseconds: the Python codec, the native (Rust)
 codec, and Erlang/OTP's own `binary_to_term/1` and `term_to_binary/1` on the
 same bytes. "Rust vs Python" is how many times faster the native codec is
@@ -133,6 +134,7 @@ moves 2.2× the traffic of the debug build. Measured on the same machine
 with the WSL virtual machine limited to the eight performance cores,
 CPython 3.13.13 and Erlang/OTP 25.3 and 29.1; Pyrlang's README has the
 latencies and the setup.
+<!-- performance-end -->
 
 ## Atoms
 

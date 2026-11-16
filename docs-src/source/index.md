@@ -81,6 +81,13 @@ The message is the Python codec's; the native codec words it differently.
 The class is that of the codec in use, so always catch
 `codec.PyCodecError`.
 
+## Performance
+
+```{include} ../../README.md
+:start-after: <!-- performance-start -->
+:end-before: <!-- performance-end -->
+```
+
 ```{toctree}
 :maxdepth: 2
 :caption: Contents
