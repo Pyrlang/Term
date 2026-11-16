@@ -65,7 +65,7 @@ dependencies = [
 
 [[package]]
 name = "native_codec_impl"
-version = "2026.1002.0-alpha"
+version = "2.0.0"
 dependencies = [
  "flate2",
  "pyo3",

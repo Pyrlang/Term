@@ -1,6 +1,6 @@
 [package]
 name = "native_codec_impl"
-version = "2026.1002.0-alpha"
+version = "2.0.0"
 authors = ["Dmytro Lytovchenko <dmytro.lytovchenko@erlang-solutions.com>"]
 edition = "2021"
 

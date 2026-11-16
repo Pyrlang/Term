@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.0 (2026-11-16)
 
 - Documentation rebuilt (Sphinx, Furo, MyST) and rewritten for the current
   code: data types, codec options, limits; every example on the pages is

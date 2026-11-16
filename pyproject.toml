@@ -5,8 +5,8 @@ requires = ["setuptools>=77", "setuptools-rust>=1.12"]
 build-backend = "setuptools.build_meta"
 
 [tool.bumpver]
-current_version = "2026.1002-alpha"
-version_pattern = "YYYY.BUILD[-TAG]"
+current_version = "2.0.0"
+version_pattern = "MAJOR.MINOR.PATCH"
 commit_message = "bump version {old_version} -> {new_version}"
 commit = true
 tag = true
@@ -14,7 +14,7 @@ push = true
 
 [project]
 name = "pyrlang-term"
-version = "2026.1002-alpha"
+version = "2.0.0"
 description = "Erlang term and External Term Format codec in Python and native Rust extension"
 readme = "README.md"
 authors = [
@@ -109,6 +109,6 @@ no_implicit_optional = true
     '^version = "{version}"',
 ]
 "Cargo.toml" = [
-    '^version = "YYYY.BUILD.0[-TAG]"',
+    '^version = "{version}"',
 ]
 
