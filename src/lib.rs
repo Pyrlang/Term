@@ -76,7 +76,7 @@ fn term_to_binary<'py>(
     enc_state.data.push(consts::ETF_VERSION_TAG);
 
     enc_state.encode(py_term)?;
-    Ok(PyBytes::new(py, &enc_state.data))
+    Ok(enc_state.into_bytes()?)
 }
 
 /// Encodes a term without the 131 byte header.
@@ -89,7 +89,7 @@ fn term_to_binary_2<'py>(
 ) -> PyResult<Bound<'py, PyBytes>> {
     let mut enc_state = Encoder::new(py, opt)?;
     enc_state.encode(py_term)?;
-    Ok(PyBytes::new(py, &enc_state.data))
+    Ok(enc_state.into_bytes()?)
 }
 
 /// Erlang Term Format encoding and decoding.

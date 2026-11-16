@@ -1764,6 +1764,32 @@ def test_fun_size_is_ignored(codec: ModuleType, size: int) -> None:
     assert codec.term_to_binary(value, None) == data
 
 
+def test_fun_size_counts_large_free_binaries(codec: ModuleType) -> None:
+    """Size counts free variables of any size: OTP 29's closure, given a
+    10 KiB binary and itself as its free variables. The native encoder
+    writes large binaries straight into the result (TERM-27)."""
+    data = (FIXTURE_DIR / "fun_closure.etf").read_bytes()
+    value, _tail = codec.binary_to_term(data, None)
+    inner, _tail = codec.binary_to_term(data, None)
+    big = bytes(range(256)) * 40
+    value.free_ = [big, inner]
+    # OTP's bytes: 131, 112, Size(4), Arity, Uniq(16), Index(4), NumFree(4),
+    # Module, OldIndex, OldUniq, Pid, then the free variables 1 and 'two'.
+    free_at = len(data) - len(bytes([97, 1, 119, 3]) + b"two")
+    fun = (
+        bytes([112, 0, 0, 0, 0])
+        + data[6:27]
+        + (2).to_bytes(4)
+        + data[31:free_at]
+        + bytes([109])
+        + len(big).to_bytes(4)
+        + big
+        + data[1:]
+    )
+    expected = bytes([131, 112]) + (len(fun) - 1).to_bytes(4) + fun[5:]
+    assert codec.term_to_binary(value, None) == expected
+
+
 def test_fun_equality() -> None:
     data = (FIXTURE_DIR / "fun_closure.etf").read_bytes()
     a = py_impl.binary_to_term(data, None)[0]

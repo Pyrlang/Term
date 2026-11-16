@@ -31,6 +31,11 @@ use std::ffi::c_int;
 pub struct Encoder<'py> {
     pub py: Python<'py>, // Python instance will live at least as long as Encoder
     pub data: Vec<u8>,
+    // Binaries of at least DEFER_BINARY bytes, not copied into `data`: each
+    // belongs at its offset in `data`, and `into_bytes` puts it there.
+    deferred: Vec<(usize, Bound<'py, PyBytes>)>,
+    // The total size of the binaries in `deferred`.
+    deferred_len: usize,
     // The "encode_hook" option; None when it is missing or empty.
     encode_hook: Option<Bound<'py, PyDict>>,
     catch_all: Option<Bound<'py, PyAny>>,
@@ -80,8 +85,12 @@ enum After<'py> {
     Nil,
     /// The tail of an improper list, encoded as one more child.
     Tail(Bound<'py, PyAny>),
-    /// Fill in the Size of the NEW_FUN_EXT whose Size field is at this offset.
-    FunSize(usize),
+    /// Fill in the Size of the NEW_FUN_EXT whose Size field is at offset
+    /// `at` of `data`, `start` of the whole output (see `Encoder::len`).
+    FunSize {
+        at: usize,
+        start: usize,
+    },
 }
 
 /// A compound value whose children are being encoded. `container` keeps the
@@ -96,8 +105,13 @@ struct Frame<'py> {
 
 impl<'py> Frame<'py> {
     /// The next child to encode, or None when the frame is finished (its
-    /// closing NIL_EXT, if any, is then written to `data`).
-    fn next_child(&mut self, data: &mut Vec<u8>) -> CodecResult<Option<Bound<'py, PyAny>>> {
+    /// closing NIL_EXT, if any, is then written to `data`; `deferred_len`
+    /// is `Encoder::deferred_len`).
+    fn next_child(
+        &mut self,
+        data: &mut Vec<u8>,
+        deferred_len: usize,
+    ) -> CodecResult<Option<Bound<'py, PyAny>>> {
         if self.next < self.count {
             let i = self.next;
             self.next += 1;
@@ -115,18 +129,19 @@ impl<'py> Frame<'py> {
                 Ok(None)
             }
             After::Tail(tail) => Ok(Some(tail)),
-            After::FunSize(at) => {
-                patch_fun_size(data, at)?;
+            After::FunSize { at, start } => {
+                let end = data.len().saturating_add(deferred_len);
+                patch_fun_size(data, at, end.saturating_sub(start))?;
                 Ok(None)
             }
         }
     }
 }
 
-/// Fill in the Size of a NEW_FUN_EXT that ends here: the bytes from the Size
-/// field (at offset `at`) to the end of the fun.
-fn patch_fun_size(data: &mut [u8], at: usize) -> CodecResult<()> {
-    let size = length_u32(data.len().saturating_sub(at))?;
+/// Fill in the Size of a NEW_FUN_EXT whose Size field is at offset `at`:
+/// `size` bytes from that field to the end of the fun.
+fn patch_fun_size(data: &mut [u8], at: usize, size: usize) -> CodecResult<()> {
+    let size = length_u32(size)?;
     let field = data
         .get_mut(at..at.saturating_add(4))
         .ok_or(CodecError::BadValue("Size field is missing"))?;
@@ -199,6 +214,8 @@ impl<'py> Encoder<'py> {
         let mut encoder = Encoder {
             py,
             data: Vec::with_capacity(32),
+            deferred: Vec::new(),
+            deferred_len: 0,
             encode_hook: None,
             catch_all: None,
             max_depth: decoder::DEFAULT_MAX_DEPTH,
@@ -215,6 +232,39 @@ impl<'py> Encoder<'py> {
         encoder.max_depth =
             helpers::get_positive_int_opt(&py_opts, "max_depth", decoder::DEFAULT_MAX_DEPTH)?;
         Ok(encoder)
+    }
+
+    /// The size of the output so far: `data` and the deferred binaries.
+    fn len(&self) -> usize {
+        self.data.len().saturating_add(self.deferred_len)
+    }
+
+    /// The finished output: `data` with the deferred binaries in their
+    /// places, written once into the `bytes` object (TERM-27: building it
+    /// in a `Vec` and copying it took two fresh buffers, and their page
+    /// faults cost twenty copies of a 1 MB binary).
+    pub fn into_bytes(self) -> CodecResult<Bound<'py, PyBytes>> {
+        if self.deferred.is_empty() {
+            return Ok(PyBytes::new(self.py, &self.data));
+        }
+        let total = self
+            .data
+            .len()
+            .checked_add(self.deferred_len)
+            .ok_or(CodecError::TooLong {
+                size: self.deferred_len,
+            })?;
+        let bytes = PyBytes::new_with(self.py, total, |out| {
+            let mut pos = 0usize;
+            let mut from = 0usize;
+            for (at, chunk) in &self.deferred {
+                put(out, &mut pos, self.data.get(from..*at))?;
+                put(out, &mut pos, Some(chunk.as_bytes()))?;
+                from = *at;
+            }
+            put(out, &mut pos, self.data.get(from..))
+        })?;
+        Ok(bytes)
     }
 
     /// Encode a value and append it to `data`.
@@ -261,7 +311,7 @@ impl<'py> Encoder<'py> {
                 let Some(frame) = stack.last_mut() else {
                     return Ok(());
                 };
-                if let Some(child) = frame.next_child(&mut self.data)? {
+                if let Some(child) = frame.next_child(&mut self.data, self.deferred_len)? {
                     value = child;
                     break;
                 }
@@ -746,6 +796,7 @@ impl<'py> Encoder<'py> {
 
         self.data.push(consts::TAG_NEW_FUN_EXT);
         let size_at = self.data.len();
+        let size_start = self.len();
         self.data.push_u32(0); // Size, filled in by patch_fun_size
         self.data.push(arity);
         self.data.extend_from_slice(uniq);
@@ -756,10 +807,19 @@ impl<'py> Encoder<'py> {
         self.write_i64(old_uniq);
         self.write_pid(&pid)?;
         if count == 0 {
-            patch_fun_size(&mut self.data, size_at)?;
+            let size = self.len().saturating_sub(size_start);
+            patch_fun_size(&mut self.data, size_at, size)?;
             return Ok(Step::Done);
         }
-        Ok(self.open(fun, children, count, After::FunSize(size_at)))
+        Ok(self.open(
+            fun,
+            children,
+            count,
+            After::FunSize {
+                at: size_at,
+                start: size_start,
+            },
+        ))
     }
 
     /// Encode a Port: always V4_PORT_EXT, as OTP 26+ writes every port.
@@ -805,8 +865,13 @@ impl<'py> Encoder<'py> {
     fn write_binary(&mut self, py_bytes: &Bound<'py, PyBytes>) -> CodecResult<()> {
         let data: &[u8] = py_bytes.as_bytes();
         self.data.push(consts::TAG_BINARY_EXT);
-        self.data.push_u32(data.len() as u32);
-        self.data.extend_from_slice(data);
+        self.data.push_u32(length_u32(data.len())?);
+        if data.len() < DEFER_BINARY {
+            self.data.extend_from_slice(data);
+        } else {
+            self.deferred.push((self.data.len(), py_bytes.clone()));
+            self.deferred_len = self.deferred_len.saturating_add(data.len());
+        }
         Ok(())
     }
 
@@ -837,6 +902,24 @@ impl<'py> Encoder<'py> {
         Ok(())
     }
 } // end impl
+
+/// Binaries of at least this many bytes are not copied into the encoder's
+/// buffer but straight into the result (see `Encoder::into_bytes`).
+const DEFER_BINARY: usize = 4096;
+
+/// Copy `src` into `out` at `pos` and move `pos` past it; None or a `src`
+/// that does not fit is an error (it cannot happen: `out` is sized from
+/// the same parts).
+fn put(out: &mut [u8], pos: &mut usize, src: Option<&[u8]>) -> PyResult<()> {
+    let missing = || PyErr::from(CodecError::BadValue("encoder output does not add up"));
+    let src = src.ok_or_else(missing)?;
+    let end = pos.checked_add(src.len()).ok_or_else(missing)?;
+    out.get_mut(*pos..end)
+        .ok_or_else(missing)?
+        .copy_from_slice(src);
+    *pos = end;
+    Ok(())
+}
 
 /// Non-ASCII strings of at least this many characters are encoded to
 /// Latin-1 by CPython (one copy; the Rust loop took ten times as long).
