@@ -19,6 +19,8 @@
   result: a 1 MB binary encodes as fast as OTP does it (15 times faster
   than before on Linux, twice on Windows). A binary of 4 GiB or more raises
   `PyCodecError` instead of being written with a wrong length.
+- The native decoder builds lists and tuples with less overhead: deeply
+  nested and long lists decode up to twice as fast.
 - Both decoders refuse a map whose keys are different in Erlang and equal
   in Python (`#{1 => a, 1.0 => b}`, `true` and `1`, `0.0` and `-0.0`, an
   atom and a string of the same text, tuples of these) with `PyCodecError`.

@@ -66,15 +66,19 @@ pub struct Decoder<'py> {
 /// A compound term whose children are being decoded (see `Decoder::decode`).
 /// `remaining` counts the children still to come.
 enum Frame<'py> {
-    /// LIST_EXT elements.
+    /// LIST_EXT elements, appended to the Python list as they come (TERM-28:
+    /// collecting them in a `Vec` first cost a Rust allocation and a copy).
     List {
-        items: Vec<Bound<'py, PyAny>>,
+        list: Bound<'py, PyList>,
         remaining: usize,
     },
-    /// All elements read; a tail that is not NIL comes next.
-    ListTail { items: Vec<Bound<'py, PyAny>> },
+    /// All elements read; a tail that is not NIL comes next, into `tail`.
+    ListTail {
+        list: Bound<'py, PyList>,
+        tail: Option<Bound<'py, PyAny>>,
+    },
     Tuple {
-        items: Vec<Bound<'py, PyAny>>,
+        items: Bound<'py, PyList>,
         remaining: usize,
     },
     /// Keys and values in turn; `key` holds a key while its value is read.
@@ -86,18 +90,21 @@ enum Frame<'py> {
     /// RECORD_EXT values; `dict` has the field names (in order) and gets
     /// the values, `next` indexes `names` for the next value.
     Record {
-        head: RecordHead<'py>,
+        head: Box<RecordHead<'py>>,
         dict: Bound<'py, PyDict>,
         names: Vec<Bound<'py, PyAny>>,
         next: usize,
     },
     /// NEW_FUN_EXT free variables; the parts before them are in `head`.
     Fun {
-        head: FunHead<'py>,
+        head: Box<FunHead<'py>>,
         items: Vec<Bound<'py, PyAny>>,
         remaining: usize,
     },
 }
+
+// The heads of funs and records are boxed: they are rare and large, and
+// every frame is as large as the largest variant.
 
 /// The parts of a RECORD_EXT before its field names.
 struct RecordHead<'py> {
@@ -321,15 +328,22 @@ impl<'py> Decoder<'py> {
                 }
                 Progress::Done(value, hooked) => (value, hooked),
             };
-            // Pass finished values up to the frames waiting for them.
+            // Pass finished values up to the frames waiting for them. A frame
+            // takes its children in place and leaves the stack when complete.
             loop {
                 if !hooked {
                     value = self.apply_hook(value)?;
                 }
-                let Some(frame) = stack.pop() else {
+                let Some(frame) = stack.last_mut() else {
                     return Ok(value);
                 };
-                match self.add_child(frame, value, reader)? {
+                if !self.add_child(frame, value)? {
+                    break;
+                }
+                let Some(frame) = stack.pop() else {
+                    return Err(CodecError::BadValue("decoder stack is empty"));
+                };
+                match self.finish(frame, reader)? {
                     Progress::Waiting(frame) => {
                         stack.push(frame);
                         break;
@@ -375,7 +389,7 @@ impl<'py> Decoder<'py> {
                 // The elements and then the tail, at least one byte each.
                 let count = read_count(reader, false, 1, "LIST_EXT")?;
                 return Ok(Start::Open(Frame::List {
-                    items: items_for(count),
+                    list: PyList::empty(self.py),
                     remaining: count,
                 }));
             }
@@ -411,14 +425,14 @@ impl<'py> Decoder<'py> {
             consts::TAG_SMALL_TUPLE_EXT => {
                 let arity = read_count(reader, true, 1, "SMALL_TUPLE_EXT")?;
                 return Ok(Start::Open(Frame::Tuple {
-                    items: items_for(arity),
+                    items: PyList::empty(self.py),
                     remaining: arity,
                 }));
             }
             consts::TAG_LARGE_TUPLE_EXT => {
                 let arity = read_count(reader, false, 1, "LARGE_TUPLE_EXT")?;
                 return Ok(Start::Open(Frame::Tuple {
-                    items: items_for(arity),
+                    items: PyList::empty(self.py),
                     remaining: arity,
                 }));
             }
@@ -441,108 +455,57 @@ impl<'py> Decoder<'py> {
 
     /// A frame just started: waiting if children follow, else finished.
     fn open(&mut self, frame: Frame<'py>, reader: &mut Reader) -> CodecResult<Progress<'py>> {
+        let complete = match &frame {
+            Frame::List { remaining, .. }
+            | Frame::Tuple { remaining, .. }
+            | Frame::Map { remaining, .. }
+            | Frame::Fun { remaining, .. } => *remaining == 0,
+            Frame::Record { names, .. } => names.is_empty(),
+            Frame::ListTail { tail, .. } => tail.is_some(),
+        };
+        if complete {
+            return self.finish(frame, reader);
+        }
+        Ok(Progress::Waiting(frame))
+    }
+
+    /// Give a frame its next child, in place; true once it has them all.
+    fn add_child(&mut self, frame: &mut Frame<'py>, value: Bound<'py, PyAny>) -> CodecResult<bool> {
         match frame {
             Frame::List {
-                items,
-                remaining: 0,
-            } => self.list_end(items, reader),
-            Frame::Tuple {
-                items,
-                remaining: 0,
-            } => Ok(Progress::Done(
-                PyTuple::new(self.py, items)?.into_any(),
-                false,
-            )),
-            Frame::Map {
-                dict, remaining: 0, ..
-            } => Ok(Progress::Done(dict.into_any(), false)),
+                list: items,
+                remaining,
+            }
+            | Frame::Tuple { items, remaining } => {
+                items.append(value)?;
+                *remaining = remaining.saturating_sub(1);
+                Ok(*remaining == 0)
+            }
             Frame::Fun {
-                head,
-                items,
-                remaining: 0,
-            } => Ok(Progress::Done(self.make_fun(head, items)?, false)),
-            Frame::Record {
-                head, dict, names, ..
-            } if names.is_empty() => Ok(Progress::Done(self.make_record(head, dict)?, false)),
-            frame => Ok(Progress::Waiting(frame)),
-        }
-    }
-
-    /// All elements of a list are read: a NIL tail makes a proper list. NIL is
-    /// not a value of its own, so no decode hook sees it. Any other tail is
-    /// decoded next.
-    fn list_end(
-        &mut self,
-        items: Vec<Bound<'py, PyAny>>,
-        reader: &mut Reader,
-    ) -> CodecResult<Progress<'py>> {
-        if reader.peek()? == consts::TAG_NIL_EXT {
-            reader.read_u8()?;
-            return Ok(Progress::Done(
-                PyList::new(self.py, items)?.into_any(),
-                false,
-            ));
-        }
-        Ok(Progress::Waiting(Frame::ListTail { items }))
-    }
-
-    /// Give a frame its next child: waiting while more follow, else finished.
-    fn add_child(
-        &mut self,
-        frame: Frame<'py>,
-        value: Bound<'py, PyAny>,
-        reader: &mut Reader,
-    ) -> CodecResult<Progress<'py>> {
-        match frame {
-            Frame::List {
-                mut items,
-                remaining,
+                items, remaining, ..
             } => {
                 items.push(value);
-                let remaining = remaining.saturating_sub(1);
-                if remaining == 0 {
-                    return self.list_end(items, reader);
-                }
-                Ok(Progress::Waiting(Frame::List { items, remaining }))
+                *remaining = remaining.saturating_sub(1);
+                Ok(*remaining == 0)
             }
-            Frame::ListTail { items } => {
-                if items.is_empty() {
-                    // A zero-length list is its tail, already hooked:
-                    // <<108,0,0,0,0,97,42>> is 42 (binary_SUITE:robustness).
-                    return Ok(Progress::Done(value, true));
-                }
-                let py_list = PyList::new(self.py, items)?;
-                let cls = self.classes.improper_list.bind(self.py);
-                Ok(Progress::Done(cls.call1((py_list, value))?, false))
+            Frame::ListTail { tail, .. } => {
+                *tail = Some(value);
+                Ok(true)
             }
-            Frame::Tuple {
-                mut items,
-                remaining,
+            Frame::Map {
+                key: slot @ None, ..
             } => {
-                items.push(value);
-                let remaining = remaining.saturating_sub(1);
-                if remaining == 0 {
-                    return Ok(Progress::Done(
-                        PyTuple::new(self.py, items)?.into_any(),
-                        false,
-                    ));
-                }
-                Ok(Progress::Waiting(Frame::Tuple { items, remaining }))
+                *slot = Some(value);
+                Ok(false)
             }
             Frame::Map {
                 dict,
-                key: None,
-                remaining,
-            } => Ok(Progress::Waiting(Frame::Map {
-                dict,
-                key: Some(value),
-                remaining,
-            })),
-            Frame::Map {
-                dict,
-                key: Some(key),
+                key,
                 remaining,
             } => {
+                let key = key
+                    .take()
+                    .ok_or(CodecError::BadValue("Map value without a key"))?;
                 let before = dict.len();
                 if let Err(error) = dict.set_item(&key, value) {
                     if !error.is_instance_of::<PyTypeError>(self.py) {
@@ -557,53 +520,52 @@ impl<'py> Decoder<'py> {
                     let type_name = key.get_type().name()?.to_string();
                     return Err(CodecError::MapKeysCollide { type_name });
                 }
-                let remaining = remaining.saturating_sub(1);
-                if remaining == 0 {
-                    return Ok(Progress::Done(dict.into_any(), false));
-                }
-                Ok(Progress::Waiting(Frame::Map {
-                    dict,
-                    key: None,
-                    remaining,
-                }))
+                *remaining = remaining.saturating_sub(1);
+                Ok(*remaining == 0)
             }
             Frame::Record {
-                head,
-                dict,
-                names,
-                next,
+                dict, names, next, ..
             } => {
                 let field = names
-                    .get(next)
+                    .get(*next)
                     .ok_or(CodecError::BadValue("Record value past its fields"))?;
                 dict.set_item(field, value)?;
-                if next + 1 == names.len() {
-                    return Ok(Progress::Done(self.make_record(head, dict)?, false));
-                }
-                Ok(Progress::Waiting(Frame::Record {
-                    head,
-                    dict,
-                    names,
-                    next: next + 1,
-                }))
-            }
-            Frame::Fun {
-                head,
-                mut items,
-                remaining,
-            } => {
-                items.push(value);
-                let remaining = remaining.saturating_sub(1);
-                if remaining == 0 {
-                    return Ok(Progress::Done(self.make_fun(head, items)?, false));
-                }
-                Ok(Progress::Waiting(Frame::Fun {
-                    head,
-                    items,
-                    remaining,
-                }))
+                *next += 1;
+                Ok(*next == names.len())
             }
         }
+    }
+
+    /// The value of a frame that has all its children; a list whose tail is
+    /// not NIL waits for its tail first.
+    fn finish(&mut self, frame: Frame<'py>, reader: &mut Reader) -> CodecResult<Progress<'py>> {
+        let value = match frame {
+            Frame::List { list, .. } => {
+                // A NIL tail makes a proper list. NIL is not a value of its
+                // own, so no decode hook sees it. Any other tail is decoded
+                // next.
+                if reader.peek()? != consts::TAG_NIL_EXT {
+                    return Ok(Progress::Waiting(Frame::ListTail { list, tail: None }));
+                }
+                reader.read_u8()?;
+                list.into_any()
+            }
+            Frame::ListTail { list, tail } => {
+                let tail = tail.ok_or(CodecError::BadValue("list tail is missing"))?;
+                if list.is_empty() {
+                    // A zero-length list is its tail, already hooked:
+                    // <<108,0,0,0,0,97,42>> is 42 (binary_SUITE:robustness).
+                    return Ok(Progress::Done(tail, true));
+                }
+                let cls = self.classes.improper_list.bind(self.py);
+                cls.call1((list, tail))?
+            }
+            Frame::Tuple { items, .. } => items.to_tuple().into_any(),
+            Frame::Map { dict, .. } => dict.into_any(),
+            Frame::Fun { head, items, .. } => self.make_fun(*head, items)?,
+            Frame::Record { head, dict, .. } => self.make_record(*head, dict)?,
+        };
+        Ok(Progress::Done(value, false))
     }
 
     /// NEW_FUN_EXT after its tag: the header and the four fixed parts are
@@ -634,7 +596,7 @@ impl<'py> Decoder<'py> {
             b => return Err(CodecError::FunPidNotAPid { b }),
         };
         Ok(Start::Open(Frame::Fun {
-            head: FunHead {
+            head: Box::new(FunHead {
                 arity,
                 uniq,
                 index,
@@ -642,7 +604,7 @@ impl<'py> Decoder<'py> {
                 old_index,
                 old_uniq,
                 pid,
-            },
+            }),
             items: items_for(num_free),
             remaining: num_free,
         }))
@@ -674,11 +636,11 @@ impl<'py> Decoder<'py> {
             names.push(field);
         }
         Ok(Start::Open(Frame::Record {
-            head: RecordHead {
+            head: Box::new(RecordHead {
                 module,
                 name,
                 exported,
-            },
+            }),
             dict,
             names,
             next: 0,
